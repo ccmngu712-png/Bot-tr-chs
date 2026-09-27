@@ -20,23 +20,25 @@ def keep_alive():
     t = Thread(target=run_web)
     t.start()
 
-# Cấu hình Bot với Hybrid Commands (Nhận cả lệnh / lẫn lệnh thường)
 intents = discord.Intents.default()
 intents.message_content = True
 
 bot = commands.Bot(command_prefix="/", intents=intents)
 
+# ID Server của sếp để ép đồng bộ lệnh ngay lập tức
+MY_GUILD = discord.Object(id=1551547049600618538)
+
 @bot.event
 async def on_ready():
     print(f"Bot đã online thành công: {bot.user}")
     try:
-        # Tự động đồng bộ lệnh ngay khi khởi động
-        synced = await bot.tree.sync()
-        print(f"Đã đồng bộ thành công {len(synced)} lệnh slash.")
+        bot.tree.copy_global_to(guild=MY_GUILD)
+        synced = await bot.tree.sync(guild=MY_GUILD)
+        print(f"Đã ép đồng bộ thành công {len(synced)} lệnh cho server riêng!")
     except Exception as e:
         print(f"Lỗi đồng bộ lệnh: {e}")
 
-# Dữ liệu mẫu
+# Dữ liệu mẫu quản lý câu lạc bộ
 user_wallets = {}
 user_squads = {}
 market_players = [
