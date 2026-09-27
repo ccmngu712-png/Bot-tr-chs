@@ -4,7 +4,6 @@ import time
 import sqlite3
 import asyncio
 from datetime import datetime
-from typing import Optional
 from zoneinfo import ZoneInfo
 
 import aiohttp
@@ -14,9 +13,9 @@ from discord import app_commands
 from discord.ext import commands
 
 
-# =========================================================
+# ============================================================
 # CONFIG
-# =========================================================
+# ============================================================
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
 
@@ -27,7 +26,8 @@ FOOTBALL_API_KEY = (
     or os.getenv("API_KEY", "").strip()
 )
 
-GUILD_ID = 1551547049600618538
+GUILD_ID = int(os.getenv("GUILD_ID", "0"))
+STARTUP_CHANNEL_ID = int(os.getenv("STARTUP_CHANNEL_ID", "0"))
 
 API_BASE = "https://v3.football.api-sports.io"
 TIMEZONE = "Asia/Ho_Chi_Minh"
@@ -38,13 +38,7 @@ DB_PATH = "/data/football_bot.db" if os.path.isdir("/data") else "football_bot.d
 STARTING_BALANCE = 100000
 STARTER_BONUS = 1000
 DAILY_BONUS = 50000
-
 MANCHESTER_CITY_TEAM_ID = 50
-
-
-# =========================================================
-# 11 GIẢI
-# =========================================================
 
 LEAGUES = {
     "39": ("🏴", "Premier League"),
@@ -60,11 +54,6 @@ LEAGUES = {
     "48": ("🏆", "Carabao Cup"),
 }
 
-
-# =========================================================
-# VIP
-# =========================================================
-
 VIP_LEVELS = [
     (10, 1_000_000),
     (9, 800_000),
@@ -78,37 +67,28 @@ VIP_LEVELS = [
     (1, 50_000),
 ]
 
-
-# =========================================================
-# CHECK ENV
-# =========================================================
-
 if not DISCORD_TOKEN:
     raise RuntimeError("THIẾU DISCORD_TOKEN")
 
 if not FOOTBALL_API_KEY:
     raise RuntimeError("THIẾU FOOTBALL_API_KEY")
 
+if not GUILD_ID:
+    raise RuntimeError("THIẾU GUILD_ID")
 
-# =========================================================
+
+# ============================================================
 # BOT
-# QUAN TRỌNG:
-# bot phải được tạo TRƯỚC tất cả @bot.tree.command
-# =========================================================
+# ============================================================
 
 intents = discord.Intents.default()
-
-bot = commands.Bot(
-    command_prefix="!",
-    intents=intents
-)
-
+bot = commands.Bot(command_prefix="!", intents=intents)
 GUILD = discord.Object(id=GUILD_ID)
 
 
-# =========================================================
+# ============================================================
 # DATABASE
-# =========================================================
+# ============================================================
 
 def db():
     conn = sqlite3.connect(DB_PATH)
@@ -118,7 +98,6 @@ def db():
 
 def init_db():
     with db() as conn:
-
         conn.execute("""
             CREATE TABLE IF NOT EXISTS wallets (
                 user_id INTEGER PRIMARY KEY,
@@ -132,7 +111,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS daily_claims (
                 user_id INTEGER NOT NULL,
                 claim_date TEXT NOT NULL,
-                PRIMARY KEY(user_id, claim_date)
+                PRIMARY KEY (user_id, claim_date)
             )
         """)
 
@@ -144,431 +123,252 @@ def init_db():
                 choice TEXT NOT NULL,
                 stake INTEGER NOT NULL,
                 status TEXT NOT NULL DEFAULT 'open',
-                created_at TEXT NOT NULL,
-                settled_at TEXT
+                created_at TEXT NOT NULL
             )
         """)
 
         conn.commit()
 
 
-def format_money(number):
-    return f"{int(number):,}".replace(",", ".")
-
-
-def get_vip(balance):
-    for level, minimum in VIP_LEVELS:
-        if balance >= minimum:
-            return level
-
-    return 0
-
-
-def vip_name(level):
-    if level == 0:
-        return "Thành viên"
-
-    return f"VIP {level}"
-
-
-def vip_icon(level):
-    if level >= 10:
-        return "👑"
-
-    if level >= 7:
-        return "💎"
-
-    if level >= 4:
-        return "🔥"
-
-    if level >= 1:
-        return "⭐"
-
-    return "👤"
-
-
-def get_next_vip(level):
-
-    for vip, minimum in sorted(VIP_LEVELS):
-
-        if vip > level:
-            return vip, minimum
-
-    return None, None
-
-
 def ensure_wallet(user_id):
-
     with db() as conn:
-
         row = conn.execute(
-            "SELECT * FROM wallets WHERE user_id=?",
+            "SELECT balance FROM wallets WHERE user_id=?",
             (user_id,)
         ).fetchone()
 
         if row is None:
-
-            vip = get_vip(STARTING_BALANCE)
-
             conn.execute(
-                """
-                INSERT INTO wallets
-                (user_id,balance,started,vip)
-                VALUES(?,?,?,?)
-                """,
-                (
-                    user_id,
-                    STARTING_BALANCE,
-                    0,
-                    vip
-                )
+                "INSERT INTO wallets(user_id,balance,started,vip) VALUES(?,?,0,0)",
+                (user_id, STARTING_BALANCE)
             )
-
             conn.commit()
-
             return STARTING_BALANCE
 
         return int(row["balance"])
 
 
 def get_balance(user_id):
-
     return ensure_wallet(user_id)
 
 
-def get_wallet(user_id):
+def get_vip(balance):
+    for level, minimum in VIP_LEVELS:
+        if balance >= minimum:
+            return level
+    return 0
 
-    ensure_wallet(user_id)
 
-    with db() as conn:
+def vip_name(level):
+    return f"VIP {level}" if level else "Thành viên"
 
-        return conn.execute(
-            "SELECT * FROM wallets WHERE user_id=?",
-            (user_id,)
-        ).fetchone()
+
+def vip_icon(level):
+    if level >= 10:
+        return "👑"
+    if level >= 7:
+        return "💎"
+    if level >= 4:
+        return "🔥"
+    if level >= 1:
+        return "⭐"
+    return "👤"
+
+
+def money(n):
+    return f"{int(n):,}"
 
 
 async def check_vip(user_id, channel=None):
-
-    row = get_wallet(user_id)
-
-    balance = int(row["balance"])
-    old_vip = int(row["vip"])
-
-    new_vip = get_vip(balance)
-
-    if new_vip == old_vip:
-        return
+    ensure_wallet(user_id)
 
     with db() as conn:
+        row = conn.execute(
+            "SELECT balance,vip FROM wallets WHERE user_id=?",
+            (user_id,)
+        ).fetchone()
 
-        conn.execute(
-            """
-            UPDATE wallets
-            SET vip=?
-            WHERE user_id=?
-            """,
-            (
-                new_vip,
-                user_id
+        balance = int(row["balance"])
+        old = int(row["vip"] or 0)
+        new = get_vip(balance)
+
+        if new != old:
+            conn.execute(
+                "UPDATE wallets SET vip=? WHERE user_id=?",
+                (new, user_id)
             )
-        )
+            conn.commit()
 
-        conn.commit()
-
-    # CHỈ THÔNG BÁO KHI LÊN CẤP
-    if new_vip > old_vip and channel:
-
+    if new > old and channel:
         user = bot.get_user(user_id)
-
         name = user.display_name if user else str(user_id)
 
         embed = discord.Embed(
-            title=f"🎉 CHÚC MỪNG {vip_name(new_vip).upper()} 🎉",
+            title=f"🎉 CHÚC MỪNG {vip_name(new).upper()} 🎉",
             description=(
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                f"👤 **{name}**\n\n"
-                f"💰 Số dư: **{format_money(balance)} xu**\n"
-                f"{vip_icon(new_vip)} Cấp mới: **{vip_name(new_vip)}**\n"
-                "━━━━━━━━━━━━━━━━━━━━"
+                "👑━━━━━━━━━━━━━━━━━━👑\n"
+                f"👤 **{name}**\n"
+                f"💰 Số dư: **{money(balance)} xu**\n"
+                f"{vip_icon(new)} Đã đạt **{vip_name(new)}**\n"
+                "👑━━━━━━━━━━━━━━━━━━👑"
             ),
             color=discord.Color.gold()
         )
 
         try:
             await channel.send(embed=embed)
-
         except Exception:
             pass
 
 
 async def add_money(user_id, amount, channel=None):
-
     ensure_wallet(user_id)
 
     with db() as conn:
-
         conn.execute(
-            """
-            UPDATE wallets
-            SET balance=balance+?
-            WHERE user_id=?
-            """,
-            (
-                amount,
-                user_id
-            )
+            "UPDATE wallets SET balance=balance+? WHERE user_id=?",
+            (int(amount), user_id)
         )
-
         conn.commit()
 
     await check_vip(user_id, channel)
 
 
-async def remove_money(user_id, amount, channel=None):
-
+async def remove_money(user_id, amount):
     ensure_wallet(user_id)
 
     with db() as conn:
-
         conn.execute(
-            """
-            UPDATE wallets
-            SET balance=MAX(balance-?,0)
-            WHERE user_id=?
-            """,
-            (
-                amount,
-                user_id
-            )
+            "UPDATE wallets SET balance=MAX(balance-?,0) WHERE user_id=?",
+            (int(amount), user_id)
         )
-
         conn.commit()
 
-    await check_vip(user_id, channel)
+    await check_vip(user_id)
 
 
-# =========================================================
+# ============================================================
 # FOOTBALL API
-# =========================================================
+# ============================================================
 
 class FootballAPI:
 
     def __init__(self):
-
         self.session = None
-
         self.cache = {}
-
-        self.cache_seconds = 30
-
-        self.quota = None
-
-        self.errors = []
-
+        self.last_quota = None
 
     async def start(self):
-
         if self.session is None or self.session.closed:
-
             self.session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=25),
-
+                timeout=aiohttp.ClientTimeout(total=20),
                 headers={
                     "x-apisports-key": FOOTBALL_API_KEY,
                     "Accept": "application/json"
                 }
             )
 
-
     async def close(self):
-
         if self.session and not self.session.closed:
-
             await self.session.close()
 
         self.session = None
 
-
     async def request(self, endpoint, params):
-
         await self.start()
 
-        key = (
+        cache_key = (
             endpoint,
-            tuple(
-                sorted(
-                    (str(k), str(v))
-                    for k, v in params.items()
-                )
-            )
+            tuple(sorted((str(k), str(v)) for k, v in params.items()))
         )
 
         now = time.monotonic()
 
-        cached = self.cache.get(key)
+        if cache_key in self.cache:
+            created, data = self.cache[cache_key]
 
-        if cached:
-
-            if now - cached[0] < self.cache_seconds:
-
-                return cached[1]
-
+            if now - created < 30:
+                return data
 
         url = f"{API_BASE}/{endpoint}"
 
         last_error = None
 
         for attempt in range(3):
-
             try:
-
-                async with self.session.get(
-                    url,
-                    params=params
-                ) as response:
-
+                async with self.session.get(url, params=params) as response:
                     raw = await response.text()
 
                     try:
                         data = json.loads(raw)
-
                     except Exception:
+                        data = {"errors": {"response": raw[:500]}}
 
-                        data = {
-                            "errors": {
-                                "response": raw[:500]
-                            }
-                        }
-
-
-                    remaining = response.headers.get(
+                    quota = response.headers.get(
                         "x-ratelimit-requests-remaining"
                     )
 
-                    if remaining is not None:
-
-                        self.quota = remaining
-
+                    if quota:
+                        self.last_quota = quota
 
                     if response.status >= 500:
-
                         if attempt < 2:
-
-                            await asyncio.sleep(
-                                attempt + 1
-                            )
-
+                            await asyncio.sleep(1)
                             continue
 
-
                     if response.status >= 400:
-
                         raise RuntimeError(
-                            f"HTTP {response.status}: "
-                            f"{data.get('errors')}"
+                            f"API HTTP {response.status}: "
+                            f"{data.get('errors', raw[:300])}"
                         )
-
 
                     errors = data.get("errors")
 
-                    if isinstance(errors, dict):
+                    if isinstance(errors, dict) and any(errors.values()):
+                        raise RuntimeError(str(errors))
 
-                        if any(errors.values()):
+                    if isinstance(errors, list) and errors:
+                        raise RuntimeError(str(errors))
 
-                            raise RuntimeError(
-                                str(errors)
-                            )
-
-
-                    if isinstance(errors, list):
-
-                        if errors:
-
-                            raise RuntimeError(
-                                str(errors)
-                            )
-
-
-                    self.cache[key] = (
-                        now,
-                        data
-                    )
-
+                    self.cache[cache_key] = (now, data)
                     return data
 
+            except Exception as e:
+                last_error = e
+                await asyncio.sleep(0.5)
 
-            except (
-                aiohttp.ClientError,
-                asyncio.TimeoutError,
-                RuntimeError
-            ) as error:
+        raise RuntimeError(str(last_error or "API lỗi"))
 
-                last_error = error
-
-                self.errors.append(
-                    str(error)
-                )
-
-                if attempt < 2:
-
-                    await asyncio.sleep(
-                        attempt + 1
-                    )
-
-
-        raise RuntimeError(
-            str(last_error)
-        )
-
-
-    async def next_team(
-        self,
-        team_id=50,
-        count=20
-    ):
-
-        data = await self.request(
+    async def fixtures_league(self, league):
+        return await self.request(
             "fixtures",
             {
-                "team": team_id,
-                "next": count,
+                "league": league,
+                "next": 20,
                 "timezone": TIMEZONE
             }
         )
 
-        return data.get(
-            "response",
-            []
-        )
-
-
-    async def next_league(
-        self,
-        league_id,
-        count=20
-    ):
-
-        data = await self.request(
+    async def fixtures_city(self):
+        return await self.request(
             "fixtures",
             {
-                "league": league_id,
-                "next": count,
+                "team": MANCHESTER_CITY_TEAM_ID,
+                "next": 20,
                 "timezone": TIMEZONE
             }
         )
 
-        return data.get(
-            "response",
-            []
+    async def fixture(self, fixture_id):
+        return await self.request(
+            "fixtures",
+            {
+                "id": fixture_id,
+                "timezone": TIMEZONE
+            }
         )
 
-
-    async def prediction(
-        self,
-        fixture_id
-    ):
-
+    async def prediction(self, fixture_id):
         return await self.request(
             "predictions",
             {
@@ -580,392 +380,170 @@ class FootballAPI:
 football = FootballAPI()
 
 
-# =========================================================
-# FIXTURE HELPERS
-# =========================================================
+# ============================================================
+# FOOTBALL HELPERS
+# ============================================================
 
-def fixture_id(fixture):
+UPCOMING = {"NS", "TBD"}
 
-    return (
-        fixture.get("fixture") or {}
-    ).get("id")
+FINISHED = {"FT", "AET", "PEN"}
 
 
 def fixture_status(fixture):
-
     return (
-        (
-            fixture.get("fixture") or {}
-        ).get("status") or {}
-    ).get("short", "")
+        fixture.get("fixture", {})
+        .get("status", {})
+        .get("short", "")
+    )
 
 
-def fixture_timestamp(fixture):
+def fixture_id(fixture):
+    return int(fixture.get("fixture", {}).get("id", 0))
 
+
+def team_name(fixture, side):
     return (
-        fixture.get("fixture") or {}
-    ).get("timestamp", 0)
-
-
-def is_upcoming(fixture):
-
-    return fixture_status(fixture) in {
-        "NS",
-        "TBD"
-    }
+        fixture.get("teams", {})
+        .get(side, {})
+        .get("name", "?")
+    )
 
 
 def fixture_time(fixture):
+    value = fixture.get("fixture", {}).get("date")
 
-    raw = (
-        fixture.get("fixture") or {}
-    ).get("date")
-
-    if not raw:
-
-        return "Chưa có giờ"
+    if not value:
+        return "Không rõ giờ"
 
     try:
-
-        dt = datetime.fromisoformat(
-            raw.replace(
-                "Z",
-                "+00:00"
-            )
-        )
-
-        dt = dt.astimezone(TZ)
-
-        return dt.strftime(
-            "%d/%m/%Y %H:%M"
-        )
-
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return dt.astimezone(TZ).strftime("%d/%m/%Y %H:%M")
     except Exception:
-
-        return str(raw)
-
-
-def team_name(
-    fixture,
-    side
-):
-
-    return (
-        (
-            fixture.get("teams") or {}
-        ).get(side) or {}
-    ).get(
-        "name",
-        "?"
-    )
+        return value
 
 
 def league_name(fixture):
-
-    return (
-        fixture.get("league") or {}
-    ).get(
-        "name",
-        "Giải đấu"
-    )
+    league = fixture.get("league", {})
+    return league.get("name", "Không rõ giải")
 
 
-def choice_name(
-    choice,
-    fixture
-):
+def result_from_fixture(fixture):
+    status = fixture_status(fixture)
 
-    if choice == "home":
+    if status not in FINISHED:
+        return None
 
-        return team_name(
-            fixture,
-            "home"
-        )
+    home = fixture.get("teams", {}).get("home", {})
+    away = fixture.get("teams", {}).get("away", {})
 
-    if choice == "away":
+    if home.get("winner") is True:
+        return "home"
 
-        return team_name(
-            fixture,
-            "away"
-        )
+    if away.get("winner") is True:
+        return "away"
 
-    return "Hòa"
+    goals = fixture.get("goals", {})
 
+    h = goals.get("home")
+    a = goals.get("away")
 
-def parse_prediction_score(prediction):
+    if h is None or a is None:
+        return None
 
-    score = (
-        prediction.get("score")
-        or {}
-    )
+    if h > a:
+        return "home"
 
-    fulltime = (
-        score.get("fulltime")
-        or {}
-    )
+    if a > h:
+        return "away"
 
-    home = fulltime.get("home")
-    away = fulltime.get("away")
-
-    if isinstance(home, int) and isinstance(away, int):
-
-        return home, away
+    return "draw"
 
 
-    home = score.get("home")
-    away = score.get("away")
+def prediction_data(data):
+    response = data.get("response", [])
 
-    if isinstance(home, int) and isinstance(away, int):
+    if not response:
+        return {}
 
-        return home, away
+    item = response[0]
+
+    return item.get("predictions") or {}
 
 
-    goals = (
-        prediction.get("goals")
-        or {}
-    )
+def prediction_score(pred):
+    score = pred.get("score") or {}
 
-    home = goals.get("home")
-    away = goals.get("away")
+    fulltime = score.get("fulltime") or {}
 
-    if isinstance(home, int) and isinstance(away, int):
+    h = fulltime.get("home")
+    a = fulltime.get("away")
 
-        return home, away
+    if h is not None and a is not None:
+        return h, a
 
+    h = score.get("home")
+    a = score.get("away")
+
+    if h is not None and a is not None:
+        return h, a
+
+    goals = pred.get("goals") or {}
+
+    h = goals.get("home")
+    a = goals.get("away")
+
+    if h is not None and a is not None:
+        return h, a
 
     return None
 
 
-# =========================================================
-# ERROR EMBED
-# =========================================================
-
-def api_error(exc):
-
+def api_error(error):
     return discord.Embed(
-        title="❌ API-Football lỗi",
-        description=f"`{str(exc)[:900]}`",
+        title="❌ API lỗi",
+        description=f"```{str(error)[:1800]}```",
         color=discord.Color.red()
     )
 
 
-# =========================================================
-# MATCH ANALYSIS
-# =========================================================
+# ============================================================
+# MATCH LIST
+# ============================================================
 
-async def show_prediction(
-    interaction,
-    fixture
-):
+def upcoming_fixtures(data):
+    result = []
 
-    fid = fixture_id(fixture)
+    for item in data.get("response", []):
+        if fixture_status(item) in UPCOMING:
+            result.append(item)
 
-    home = team_name(
-        fixture,
-        "home"
-    )
-
-    away = team_name(
-        fixture,
-        "away"
-    )
-
-    embed = discord.Embed(
-        title=f"🔮 {home} vs {away}",
-
-        description=(
-            f"🏆 **{league_name(fixture)}**\n"
-            f"📅 **{fixture_time(fixture)}**\n"
-            f"🆔 `{fid}`"
-        ),
-
-        color=discord.Color.blurple()
-    )
+    return result
 
 
-    try:
+def match_label(fixture):
+    return (
+        f"{team_name(fixture,'home')} vs "
+        f"{team_name(fixture,'away')} "
+        f"• {fixture_time(fixture)}"
+    )[:100]
 
-        data = await football.prediction(
-            fid
-        )
-
-        response = data.get(
-            "response",
-            []
-        )
-
-
-        if not response:
-
-            embed.add_field(
-                name="🎯 Dự đoán",
-                value=(
-                    "API chưa có dữ liệu "
-                    "dự đoán trận này."
-                ),
-                inline=False
-            )
-
-
-        else:
-
-            prediction = (
-                response[0].get(
-                    "predictions"
-                )
-                or {}
-            )
-
-
-            score = parse_prediction_score(
-                prediction
-            )
-
-
-            if score:
-
-                score_text = (
-                    f"**{score[0]} - {score[1]}**"
-                )
-
-            else:
-
-                score_text = (
-                    "API chưa trả tỷ số chính xác"
-                )
-
-
-            percent = (
-                prediction.get(
-                    "percent"
-                )
-                or {}
-            )
-
-
-            winner = (
-                prediction.get(
-                    "winner"
-                )
-                or {}
-            )
-
-
-            winner_name = (
-                winner.get("name")
-                or "Chưa xác định"
-            )
-
-
-            embed.add_field(
-                name="🎯 TỶ SỐ DỰ ĐOÁN",
-                value=score_text,
-                inline=False
-            )
-
-
-            embed.add_field(
-                name="📊 XÁC SUẤT",
-                value=(
-                    f"🏠 Home: **{percent.get('home','?')}%**\n"
-                    f"🤝 Draw: **{percent.get('draw','?')}%**\n"
-                    f"✈️ Away: **{percent.get('away','?')}%**"
-                ),
-                inline=False
-            )
-
-
-            embed.add_field(
-                name="🏁 KẾT LUẬN",
-                value=f"**{winner_name}**",
-                inline=False
-            )
-
-
-            advice = prediction.get(
-                "advice"
-            )
-
-            if advice:
-
-                embed.add_field(
-                    name="💡 Nhận định API",
-                    value=str(advice)[:900],
-                    inline=False
-                )
-
-
-    except Exception as exc:
-
-        embed.add_field(
-            name="⚠️ Lỗi dự đoán",
-            value=f"`{str(exc)[:700]}`",
-            inline=False
-        )
-
-
-    embed.set_footer(
-        text="API-Football • Chỉ mang tính tham khảo"
-    )
-
-
-    await interaction.followup.send(
-        embed=embed,
-        ephemeral=True
-    )
-
-
-# =========================================================
-# MATCH SELECT
-# =========================================================
 
 class MatchSelect(discord.ui.Select):
 
-    def __init__(
-        self,
-        fixtures,
-        mode
-    ):
-
-        self.fixtures = {}
+    def __init__(self, fixtures, mode="bet"):
+        self.fixtures = fixtures
+        self.mode = mode
 
         options = []
 
-
-        for fixture in fixtures[:25]:
-
-            fid = fixture_id(
-                fixture
-            )
-
-            if not fid:
-
-                continue
-
-
-            self.fixtures[
-                str(fid)
-            ] = fixture
-
-
+        for f in fixtures[:25]:
             options.append(
                 discord.SelectOption(
-                    label=(
-                        f"{team_name(fixture,'home')} "
-                        f"vs "
-                        f"{team_name(fixture,'away')}"
-                    )[:100],
-
-                    value=str(fid),
-
-                    description=(
-                        fixture_time(
-                            fixture
-                        )[:100]
-                    )
+                    label=match_label(f),
+                    value=str(fixture_id(f)),
+                    description=league_name(f)[:100]
                 )
             )
-
 
         super().__init__(
             placeholder="⚽ Chọn trận...",
@@ -974,1845 +552,1083 @@ class MatchSelect(discord.ui.Select):
             options=options
         )
 
+    async def callback(self, interaction):
+        fid = int(self.values[0])
 
-        self.mode = mode
-
-
-    async def callback(
-        self,
-        interaction
-    ):
-
-        fixture = self.fixtures.get(
-            self.values[0]
+        fixture = next(
+            (f for f in self.fixtures if fixture_id(f) == fid),
+            None
         )
 
-
         if not fixture:
-
             await interaction.response.send_message(
                 "❌ Không tìm thấy trận.",
                 ephemeral=True
             )
-
             return
 
-
         if self.mode == "bet":
-
             await interaction.response.send_modal(
-                BetModal(fixture)
+                StakeModal(fixture)
             )
-
         else:
-
-            await interaction.response.defer(
-                ephemeral=True
-            )
-
-            await show_prediction(
-                interaction,
-                fixture
-            )
+            await show_prediction(interaction, fixture)
 
 
 class MatchView(discord.ui.View):
 
-    def __init__(
-        self,
-        fixtures,
-        mode
-    ):
-
-        super().__init__(
-            timeout=180
-        )
+    def __init__(self, fixtures, mode="bet"):
+        super().__init__(timeout=180)
 
         if fixtures:
+            self.add_item(MatchSelect(fixtures, mode))
 
-            self.add_item(
-                MatchSelect(
-                    fixtures,
-                    mode
+
+# ============================================================
+# CUOC
+# ============================================================
+
+class CuocLeagueSelect(discord.ui.Select):
+
+    def __init__(self):
+        options = []
+
+        for league_id, (icon, name) in LEAGUES.items():
+            options.append(
+                discord.SelectOption(
+                    label=name,
+                    value=league_id,
+                    emoji=icon
                 )
             )
 
+        super().__init__(
+            placeholder="🏆 Chọn giải để cược...",
+            options=options,
+            min_values=1,
+            max_values=1
+        )
 
-# =========================================================
-# BET MODAL
-# =========================================================
+    async def callback(self, interaction):
+        league_id = self.values[0]
 
-class BetModal(
-    discord.ui.Modal,
-    title="💰 Nhập tiền cược"
-):
+        await interaction.response.defer(ephemeral=True)
 
-    amount = discord.ui.TextInput(
+        try:
+            data = await football.fixtures_league(league_id)
+            fixtures = upcoming_fixtures(data)
+
+            if not fixtures:
+                await interaction.followup.send(
+                    "❌ Hiện không có trận sắp tới.",
+                    ephemeral=True
+                )
+                return
+
+            name = LEAGUES[league_id][1]
+
+            embed = discord.Embed(
+                title=f"🎰 CƯỢC — {name}",
+                description=(
+                    f"Có **{len(fixtures)}** trận sắp tới.\n"
+                    "Chọn trận bên dưới."
+                ),
+                color=discord.Color.gold()
+            )
+
+            await interaction.followup.send(
+                embed=embed,
+                view=MatchView(fixtures, "bet"),
+                ephemeral=True
+            )
+
+        except Exception as e:
+            await interaction.followup.send(
+                embed=api_error(e),
+                ephemeral=True
+            )
+
+
+class CuocHomeView(discord.ui.View):
+
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.add_item(CuocLeagueSelect())
+
+    @discord.ui.button(
+        label="Các trận Man City sắp tới",
+        emoji="🔵",
+        style=discord.ButtonStyle.primary,
+        row=1
+    )
+    async def man_city(self, interaction, button):
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            data = await football.fixtures_city()
+            fixtures = upcoming_fixtures(data)
+
+            if not fixtures:
+                await interaction.followup.send(
+                    "❌ Không có trận Man City sắp tới.",
+                    ephemeral=True
+                )
+                return
+
+            embed = discord.Embed(
+                title="🔵 MAN CITY — CÁC TRẬN SẮP TỚI",
+                description="Chọn trận để nhập tiền cược.",
+                color=discord.Color.blue()
+            )
+
+            await interaction.followup.send(
+                embed=embed,
+                view=MatchView(fixtures, "bet"),
+                ephemeral=True
+            )
+
+        except Exception as e:
+            await interaction.followup.send(
+                embed=api_error(e),
+                ephemeral=True
+            )
+
+
+# ============================================================
+# SOI
+# ============================================================
+
+class SoiLeagueSelect(discord.ui.Select):
+
+    def __init__(self):
+        options = []
+
+        for league_id, (icon, name) in LEAGUES.items():
+            options.append(
+                discord.SelectOption(
+                    label=name,
+                    value=league_id,
+                    emoji=icon
+                )
+            )
+
+        super().__init__(
+            placeholder="🏆 Chọn giải để soi...",
+            options=options,
+            min_values=1,
+            max_values=1
+        )
+
+    async def callback(self, interaction):
+        league_id = self.values[0]
+
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            data = await football.fixtures_league(league_id)
+            fixtures = upcoming_fixtures(data)
+
+            if not fixtures:
+                await interaction.followup.send(
+                    "❌ Hiện không có trận sắp tới.",
+                    ephemeral=True
+                )
+                return
+
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title=f"🔎 SOI — {LEAGUES[league_id][1]}",
+                    description="Chọn trận để xem dự đoán.",
+                    color=discord.Color.green()
+                ),
+                view=MatchView(fixtures, "soi"),
+                ephemeral=True
+            )
+
+        except Exception as e:
+            await interaction.followup.send(
+                embed=api_error(e),
+                ephemeral=True
+            )
+
+
+class SoiHomeView(discord.ui.View):
+
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.add_item(SoiLeagueSelect())
+
+    @discord.ui.button(
+        label="Man City — tất cả trận",
+        emoji="🔵",
+        style=discord.ButtonStyle.primary,
+        row=1
+    )
+    async def man_city(self, interaction, button):
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            data = await football.fixtures_city()
+            fixtures = upcoming_fixtures(data)
+
+            if not fixtures:
+                await interaction.followup.send(
+                    "❌ Không có trận Man City sắp tới.",
+                    ephemeral=True
+                )
+                return
+
+            await interaction.followup.send(
+                embed=discord.Embed(
+                    title="🔵 MAN CITY — TẤT CẢ TRẬN SẮP TỚI",
+                    description="Không phân biệt giải. Chọn trận để soi.",
+                    color=discord.Color.blue()
+                ),
+                view=MatchView(fixtures, "soi"),
+                ephemeral=True
+            )
+
+        except Exception as e:
+            await interaction.followup.send(
+                embed=api_error(e),
+                ephemeral=True
+            )
+
+
+# ============================================================
+# PREDICTION
+# ============================================================
+
+async def show_prediction(interaction, fixture):
+    await interaction.response.defer(ephemeral=True)
+
+    try:
+        data = await football.prediction(fixture_id(fixture))
+        pred = prediction_data(data)
+
+        winner = pred.get("winner") or {}
+
+        winner_name = winner.get("name") or "Chưa xác định"
+        winner_comment = winner.get("comment") or ""
+
+        score = prediction_score(pred)
+
+        score_text = (
+            f"{score[0]} - {score[1]}"
+            if score
+            else "API chưa cung cấp tỷ số dự đoán"
+        )
+
+        percent = pred.get("percent") or {}
+
+        home_percent = percent.get("home", "?")
+        draw_percent = percent.get("draw", "?")
+        away_percent = percent.get("away", "?")
+
+        embed = discord.Embed(
+            title="🔎 SOI TRẬN",
+            description=(
+                f"⚽ **{team_name(fixture,'home')}**\n"
+                f"🆚 **{team_name(fixture,'away')}**\n\n"
+                f"🏆 Giải: **{league_name(fixture)}**\n"
+                f"🕐 **{fixture_time(fixture)}**"
+            ),
+            color=discord.Color.green()
+        )
+
+        embed.add_field(
+            name="🎯 Dự đoán",
+            value=f"**{winner_name}**\n{winner_comment}",
+            inline=False
+        )
+
+        embed.add_field(
+            name="🥅 Tỷ số dự đoán",
+            value=f"**{score_text}**",
+            inline=True
+        )
+
+        embed.add_field(
+            name="📊 Xác suất",
+            value=(
+                f"🏠 Home: **{home_percent}%**\n"
+                f"🤝 Draw: **{draw_percent}%**\n"
+                f"🚩 Away: **{away_percent}%**"
+            ),
+            inline=True
+        )
+
+        advice = pred.get("advice")
+
+        if advice:
+            embed.add_field(
+                name="💡 Nhận định API",
+                value=str(advice)[:1000],
+                inline=False
+            )
+
+        embed.set_footer(
+            text="Dữ liệu API-Football • Chỉ mang tính tham khảo"
+        )
+
+        await interaction.followup.send(
+            embed=embed,
+            ephemeral=True
+        )
+
+    except Exception as e:
+        await interaction.followup.send(
+            embed=api_error(e),
+            ephemeral=True
+        )
+
+
+# ============================================================
+# BETTING
+# ============================================================
+
+class StakeModal(discord.ui.Modal, title="💰 Nhập tiền cược"):
+
+    stake = discord.ui.TextInput(
         label="Số tiền cược",
-        placeholder="VD: 10000",
+        placeholder="Ví dụ: 10000",
         required=True,
         min_length=1,
         max_length=12
     )
 
-
-    def __init__(
-        self,
-        fixture
-    ):
-
+    def __init__(self, fixture):
         super().__init__()
-
         self.fixture = fixture
 
-
-    async def on_submit(
-        self,
-        interaction
-    ):
-
+    async def on_submit(self, interaction):
         try:
-
-            amount = int(
-                str(
-                    self.amount
-                )
-                .replace(
-                    ".",
-                    ""
-                )
-                .replace(
-                    ",",
-                    ""
-                )
-                .strip()
-            )
-
-        except ValueError:
-
+            amount = int(str(self.stake.value).replace(",", "").replace(".", ""))
+        except Exception:
             await interaction.response.send_message(
-                "❌ Số tiền không hợp lệ.",
+                "❌ Nhập số tiền bằng số.",
                 ephemeral=True
             )
-
             return
-
 
         if amount <= 0:
-
             await interaction.response.send_message(
-                "❌ Số tiền phải lớn hơn 0.",
+                "❌ Tiền cược phải lớn hơn 0.",
                 ephemeral=True
             )
-
             return
 
-
         if amount > 10_000_000:
-
             await interaction.response.send_message(
                 "❌ Tối đa 10.000.000 xu.",
                 ephemeral=True
             )
-
             return
 
-
-        balance = get_balance(
-            interaction.user.id
-        )
-
+        balance = get_balance(interaction.user.id)
 
         if amount > balance:
-
             await interaction.response.send_message(
-                (
-                    "❌ Không đủ xu.\n"
-                    f"Ví hiện tại: **{format_money(balance)} xu**"
-                ),
+                f"❌ Không đủ xu.\nVí hiện tại: **{money(balance)}**",
                 ephemeral=True
             )
-
             return
 
+        if fixture_status(self.fixture) not in UPCOMING:
+            await interaction.response.send_message(
+                "❌ Trận này đã bắt đầu.",
+                ephemeral=True
+            )
+            return
+
+        with db() as conn:
+            exists = conn.execute(
+                """
+                SELECT id FROM bets
+                WHERE user_id=? AND fixture_id=? AND status='open'
+                """,
+                (interaction.user.id, fixture_id(self.fixture))
+            ).fetchone()
+
+        if exists:
+            await interaction.response.send_message(
+                "❌ M đã có cược đang mở cho trận này.",
+                ephemeral=True
+            )
+            return
 
         await interaction.response.send_message(
             embed=discord.Embed(
                 title="🎯 CHỌN CỬA",
-
                 description=(
                     f"⚽ **{team_name(self.fixture,'home')}**\n"
-                    "🆚\n"
-                    f"⚽ **{team_name(self.fixture,'away')}**\n\n"
-                    f"💰 Cược: **{format_money(amount)} xu**"
+                    f"🆚 **{team_name(self.fixture,'away')}**\n\n"
+                    f"💰 Cược: **{money(amount)} xu**"
                 ),
-
                 color=discord.Color.gold()
             ),
-
-            view=BetChoiceView(
-                self.fixture,
-                amount
-            ),
-
+            view=BetChoiceView(self.fixture, amount),
             ephemeral=True
         )
 
 
-# =========================================================
-# BET CHOICE
-# =========================================================
+class BetChoiceView(discord.ui.View):
 
-class BetChoiceView(
-    discord.ui.View
-):
-
-    def __init__(
-        self,
-        fixture,
-        amount
-    ):
-
-        super().__init__(
-            timeout=120
-        )
-
+    def __init__(self, fixture, stake):
+        super().__init__(timeout=120)
         self.fixture = fixture
-        self.amount = amount
+        self.stake = stake
 
-
-    async def place(
-        self,
-        interaction,
-        choice
-    ):
-
+    async def place(self, interaction, choice):
         user_id = interaction.user.id
 
-        fid = fixture_id(
-            self.fixture
-        )
+        balance = get_balance(user_id)
 
-
-        if self.amount > get_balance(
-            user_id
-        ):
-
+        if self.stake > balance:
             await interaction.response.send_message(
                 "❌ Không đủ xu.",
                 ephemeral=True
             )
-
             return
 
-
         with db() as conn:
-
-            existing = conn.execute(
+            exists = conn.execute(
                 """
-                SELECT id
-                FROM bets
-                WHERE user_id=?
-                AND fixture_id=?
-                AND status='open'
+                SELECT id FROM bets
+                WHERE user_id=? AND fixture_id=? AND status='open'
                 """,
-
-                (
-                    user_id,
-                    fid
-                )
+                (user_id, fixture_id(self.fixture))
             ).fetchone()
 
-
-            if existing:
-
+            if exists:
                 await interaction.response.send_message(
                     "❌ M đã cược trận này rồi.",
                     ephemeral=True
                 )
-
                 return
-
-
-            conn.execute(
-                """
-                UPDATE wallets
-                SET balance=balance-?
-                WHERE user_id=?
-                """,
-
-                (
-                    self.amount,
-                    user_id
-                )
-            )
-
 
             conn.execute(
                 """
                 INSERT INTO bets
-                (
-                    user_id,
-                    fixture_id,
-                    choice,
-                    stake,
-                    status,
-                    created_at
-                )
-
-                VALUES(?,?,?,?,?,?)
+                (user_id,fixture_id,choice,stake,status,created_at)
+                VALUES (?,?,?,?,?,?)
                 """,
-
                 (
                     user_id,
-                    fid,
+                    fixture_id(self.fixture),
                     choice,
-                    self.amount,
+                    self.stake,
                     "open",
                     datetime.now(TZ).isoformat()
                 )
             )
 
+            conn.execute(
+                "UPDATE wallets SET balance=balance-? WHERE user_id=?",
+                (self.stake, user_id)
+            )
 
             conn.commit()
 
+        names = {
+            "home": team_name(self.fixture, "home"),
+            "draw": "Hòa",
+            "away": team_name(self.fixture, "away")
+        }
 
-        await interaction.response.send_message(
-            (
+        await interaction.response.edit_message(
+            content=(
                 "✅ **ĐẶT CƯỢC THÀNH CÔNG**\n\n"
-                f"⚽ Trận: **{team_name(self.fixture,'home')} "
-                f"vs {team_name(self.fixture,'away')}**\n"
-                f"🎯 Cửa: **{choice_name(choice,self.fixture)}**\n"
-                f"💰 Tiền cược: **{format_money(self.amount)} xu**\n"
-                f"💵 Còn lại: **{format_money(get_balance(user_id))} xu**"
+                f"⚽ {team_name(self.fixture,'home')} vs "
+                f"{team_name(self.fixture,'away')}\n"
+                f"🎯 Cửa: **{names[choice]}**\n"
+                f"💰 Tiền cược: **{money(self.stake)} xu**\n"
+                f"👛 Ví còn: **{money(get_balance(user_id))} xu**"
             ),
-            ephemeral=True
+            embed=None,
+            view=None
         )
 
-
     @discord.ui.button(
-        label="🏠 Chủ nhà",
-        style=discord.ButtonStyle.primary
-    )
-    async def home(
-        self,
-        interaction,
-        button
-    ):
-
-        await self.place(
-            interaction,
-            "home"
-        )
-
-
-    @discord.ui.button(
-        label="🤝 Hòa",
-        style=discord.ButtonStyle.secondary
-    )
-    async def draw(
-        self,
-        interaction,
-        button
-    ):
-
-        await self.place(
-            interaction,
-            "draw"
-        )
-
-
-    @discord.ui.button(
-        label="✈️ Đội khách",
+        label="Chủ nhà",
+        emoji="🏠",
         style=discord.ButtonStyle.success
     )
-    async def away(
-        self,
-        interaction,
-        button
-    ):
-
-        await self.place(
-            interaction,
-            "away"
-        )
-
-
-# =========================================================
-# CUOC HOME
-# =========================================================
-
-class CuocLeagueSelect(
-    discord.ui.Select
-):
-
-    def __init__(self):
-
-        options = []
-
-        for league_id, (
-            emoji,
-            name
-        ) in LEAGUES.items():
-
-            options.append(
-                discord.SelectOption(
-                    label=name,
-                    value=league_id,
-                    emoji=emoji
-                )
-            )
-
-
-        super().__init__(
-            placeholder="🏆 Chọn giải để cược...",
-            options=options
-        )
-
-
-    async def callback(
-        self,
-        interaction
-    ):
-
-        league_id = int(
-            self.values[0]
-        )
-
-        emoji, name = LEAGUES[
-            str(league_id)
-        ]
-
-
-        await interaction.response.defer(
-            ephemeral=True
-        )
-
-
-        try:
-
-            fixtures = await football.next_league(
-                league_id,
-                20
-            )
-
-
-            fixtures = [
-                x
-                for x in fixtures
-                if is_upcoming(x)
-            ]
-
-
-            fixtures.sort(
-                key=fixture_timestamp
-            )
-
-
-            if not fixtures:
-
-                await interaction.followup.send(
-                    (
-                        f"❌ Chưa có trận sắp tới "
-                        f"trong **{name}**."
-                    ),
-                    ephemeral=True
-                )
-
-                return
-
-
-            await interaction.followup.send(
-
-                embed=discord.Embed(
-                    title=f"{emoji} {name}",
-
-                    description=(
-                        f"Chọn trận để cược.\n"
-                        f"Có **{len(fixtures)}** trận."
-                    ),
-
-                    color=discord.Color.green()
-                ),
-
-                view=MatchView(
-                    fixtures,
-                    "bet"
-                ),
-
-                ephemeral=True
-            )
-
-
-        except Exception as exc:
-
-            await interaction.followup.send(
-                embed=api_error(exc),
-                ephemeral=True
-            )
-
-
-class CuocHomeView(
-    discord.ui.View
-):
-
-    def __init__(self):
-
-        super().__init__(
-            timeout=300
-        )
-
-        self.add_item(
-            CuocLeagueSelect()
-        )
-
+    async def home(self, interaction, button):
+        await self.place(interaction, "home")
 
     @discord.ui.button(
-        label="🔵 Các trận Man City sắp tới",
-        style=discord.ButtonStyle.primary,
-        row=1
+        label="Hòa",
+        emoji="🤝",
+        style=discord.ButtonStyle.secondary
     )
-    async def man_city(
-        self,
-        interaction,
-        button
-    ):
-
-        await interaction.response.defer(
-            ephemeral=True
-        )
-
-
-        try:
-
-            fixtures = await football.next_team(
-                MANCHESTER_CITY_TEAM_ID,
-                20
-            )
-
-
-            fixtures = [
-                x
-                for x in fixtures
-                if is_upcoming(x)
-            ]
-
-
-            fixtures.sort(
-                key=fixture_timestamp
-            )
-
-
-            if not fixtures:
-
-                await interaction.followup.send(
-                    "❌ Không có trận Man City sắp tới.",
-                    ephemeral=True
-                )
-
-                return
-
-
-            await interaction.followup.send(
-
-                embed=discord.Embed(
-                    title="🔵 MAN CITY — CÁC TRẬN SẮP TỚI",
-
-                    description=(
-                        f"Tất cả trận tiếp theo của Man City.\n"
-                        f"**{len(fixtures)}** trận."
-                    ),
-
-                    color=discord.Color.blue()
-                ),
-
-                view=MatchView(
-                    fixtures,
-                    "bet"
-                ),
-
-                ephemeral=True
-            )
-
-
-        except Exception as exc:
-
-            await interaction.followup.send(
-                embed=api_error(exc),
-                ephemeral=True
-            )
-
-
-# =========================================================
-# SOI HOME
-# =========================================================
-
-class SoiLeagueSelect(
-    discord.ui.Select
-):
-
-    def __init__(self):
-
-        options = []
-
-        for league_id, (
-            emoji,
-            name
-        ) in LEAGUES.items():
-
-            options.append(
-                discord.SelectOption(
-                    label=name,
-                    value=league_id,
-                    emoji=emoji
-                )
-            )
-
-
-        super().__init__(
-            placeholder="🏆 Chọn giải để soi...",
-            options=options
-        )
-
-
-    async def callback(
-        self,
-        interaction
-    ):
-
-        league_id = int(
-            self.values[0]
-        )
-
-        emoji, name = LEAGUES[
-            str(league_id)
-        ]
-
-
-        await interaction.response.defer(
-            ephemeral=True
-        )
-
-
-        try:
-
-            fixtures = await football.next_league(
-                league_id,
-                20
-            )
-
-
-            fixtures = [
-                x
-                for x in fixtures
-                if is_upcoming(x)
-            ]
-
-
-            fixtures.sort(
-                key=fixture_timestamp
-            )
-
-
-            if not fixtures:
-
-                await interaction.followup.send(
-                    (
-                        f"❌ Chưa có trận sắp tới "
-                        f"trong **{name}**."
-                    ),
-                    ephemeral=True
-                )
-
-                return
-
-
-            await interaction.followup.send(
-
-                embed=discord.Embed(
-                    title=f"{emoji} {name}",
-
-                    description=(
-                        "Chọn trận để soi."
-                    ),
-
-                    color=discord.Color.blurple()
-                ),
-
-                view=MatchView(
-                    fixtures,
-                    "soi"
-                ),
-
-                ephemeral=True
-            )
-
-
-        except Exception as exc:
-
-            await interaction.followup.send(
-                embed=api_error(exc),
-                ephemeral=True
-            )
-
-
-class SoiHomeView(
-    discord.ui.View
-):
-
-    def __init__(self):
-
-        super().__init__(
-            timeout=300
-        )
-
-        self.add_item(
-            SoiLeagueSelect()
-        )
-
+    async def draw(self, interaction, button):
+        await self.place(interaction, "draw")
 
     @discord.ui.button(
-        label="🔵 Man City — tất cả trận",
-        style=discord.ButtonStyle.primary,
-        row=1
+        label="Đội khách",
+        emoji="🚩",
+        style=discord.ButtonStyle.danger
     )
-    async def man_city(
-        self,
-        interaction,
-        button
-    ):
-
-        await interaction.response.defer(
-            ephemeral=True
-        )
+    async def away(self, interaction, button):
+        await self.place(interaction, "away")
 
 
-        try:
-
-            fixtures = await football.next_team(
-                MANCHESTER_CITY_TEAM_ID,
-                20
-            )
-
-
-            fixtures = [
-                x
-                for x in fixtures
-                if is_upcoming(x)
-            ]
-
-
-            fixtures.sort(
-                key=fixture_timestamp
-            )
-
-
-            await interaction.followup.send(
-
-                embed=discord.Embed(
-                    title="🔵 MAN CITY — TẤT CẢ TRẬN",
-
-                    description=(
-                        "Tất cả trận Man City sắp tới "
-                        "không phân biệt giải.\n"
-                        f"**{len(fixtures)}** trận."
-                    ),
-
-                    color=discord.Color.blue()
-                ),
-
-                view=MatchView(
-                    fixtures,
-                    "soi"
-                ),
-
-                ephemeral=True
-            )
-
-
-        except Exception as exc:
-
-            await interaction.followup.send(
-                embed=api_error(exc),
-                ephemeral=True
-            )
-
-
-# =========================================================
-# /CUOC
-# =========================================================
+# ============================================================
+# COMMAND /CUOC
+# ============================================================
 
 @bot.tree.command(
     name="cuoc",
-    description="Mở bảng cược bóng đá"
+    description="Cược bóng đá",
+    guild=GUILD
 )
-async def cuoc(
-    interaction: discord.Interaction
-):
-
+async def cuoc(interaction: discord.Interaction):
     embed = discord.Embed(
-
-        title="⚽ BẢNG CƯỢC BÓNG ĐÁ",
-
+        title="🎰 CƯỢC BÓNG ĐÁ",
         description=(
-            "🏆 Chọn 1 trong 11 giải đấu bên dưới.\n"
-            "🔵 Hoặc xem tất cả trận Man City sắp tới.\n\n"
-            "💰 Cược bằng xu ảo."
+            "🏆 Chọn một trong **11 giải** bên dưới\n"
+            "hoặc bấm riêng **🔵 Các trận Man City sắp tới**."
         ),
-
-        color=discord.Color.blue()
-    )
-
-
-    await interaction.response.send_message(
-
-        embed=embed,
-
-        view=CuocHomeView(),
-
-        ephemeral=True
-    )
-
-
-# =========================================================
-# /SOI
-# =========================================================
-
-@bot.tree.command(
-    name="soi",
-    description="Soi và dự đoán bóng đá"
-)
-async def soi(
-    interaction: discord.Interaction
-):
-
-    embed = discord.Embed(
-
-        title="🔮 SOI BÓNG ĐÁ",
-
-        description=(
-            "🏆 Chọn 1 trong 11 giải đấu.\n"
-            "🔵 Hoặc xem tất cả trận Man City.\n\n"
-            "Bot sẽ lấy dữ liệu dự đoán từ API-Football "
-            "nếu API có dữ liệu."
-        ),
-
-        color=discord.Color.blurple()
-    )
-
-
-    await interaction.response.send_message(
-
-        embed=embed,
-
-        view=SoiHomeView(),
-
-        ephemeral=True
-    )
-
-
-# =========================================================
-# /VI
-# =========================================================
-
-@bot.tree.command(
-    name="vi",
-    description="Xem ví và VIP"
-)
-async def vi(
-    interaction: discord.Interaction
-):
-
-    row = get_wallet(
-        interaction.user.id
-    )
-
-
-    balance = int(
-        row["balance"]
-    )
-
-    vip = get_vip(
-        balance
-    )
-
-
-    next_level, next_money = get_next_vip(
-        vip
-    )
-
-
-    if next_level is None:
-
-        next_text = (
-            "👑 **VIP 10 MAX**"
-        )
-
-    else:
-
-        missing = max(
-            0,
-            next_money - balance
-        )
-
-        next_text = (
-            f"🎯 **VIP {next_level}**\n"
-            f"Cần: **{format_money(next_money)} xu**\n"
-            f"Còn thiếu: **{format_money(missing)} xu**"
-        )
-
-
-    embed = discord.Embed(
-
-        title=(
-            f"{vip_icon(vip)} "
-            f"{vip_name(vip)}"
-        ),
-
         color=discord.Color.gold()
     )
 
-
     embed.add_field(
-
-        name="💰 Số dư",
-
+        name="🏆 Các giải",
         value=(
-            f"**{format_money(balance)} xu**"
+            "Premier League\n"
+            "Champions League\n"
+            "La Liga\n"
+            "Serie A\n"
+            "Bundesliga\n"
+            "Ligue 1\n"
+            "Eredivisie\n"
+            "Primeira Liga\n"
+            "Championship\n"
+            "FA Cup\n"
+            "Carabao Cup"
         ),
-
-        inline=False
+        inline=True
     )
-
 
     embed.add_field(
-
-        name="📈 Cấp tiếp theo",
-
-        value=next_text,
-
-        inline=False
+        name="🔵 Man City",
+        value="Tất cả trận sắp tới của Man City, không phân biệt giải.",
+        inline=True
     )
-
-
-    embed.add_field(
-
-        name="🎁 Tiền mặc định",
-
-        value=(
-            f"Người mới có "
-            f"**{format_money(STARTING_BALANCE)} xu**."
-        ),
-
-        inline=False
-    )
-
 
     await interaction.response.send_message(
-
         embed=embed,
-
+        view=CuocHomeView(),
         ephemeral=True
     )
 
 
-# =========================================================
-# /KHOINGHIEP
-# =========================================================
+# ============================================================
+# COMMAND /SOI
+# ============================================================
 
 @bot.tree.command(
-    name="khoinghiep",
-    description="Nhận 1.000 xu khởi nghiệp một lần"
+    name="soi",
+    description="Soi bóng đá",
+    guild=GUILD
 )
-async def khoinghiep(
-    interaction: discord.Interaction
-):
-
-    user_id = interaction.user.id
-
-    ensure_wallet(
-        user_id
-    )
-
-
-    with db() as conn:
-
-        row = conn.execute(
-
-            """
-            SELECT started
-            FROM wallets
-            WHERE user_id=?
-            """,
-
-            (
-                user_id,
-            )
-
-        ).fetchone()
-
-
-        if row["started"]:
-
-            await interaction.response.send_message(
-
-                "❌ M đã nhận 1.000 xu khởi nghiệp rồi.",
-
-                ephemeral=True
-            )
-
-            return
-
-
-        conn.execute(
-
-            """
-            UPDATE wallets
-
-            SET balance=balance+?,
-                started=1
-
-            WHERE user_id=?
-            """,
-
-            (
-                STARTER_BONUS,
-                user_id
-            )
-        )
-
-
-        conn.commit()
-
-
-    await check_vip(
-        user_id,
-        interaction.channel
-    )
-
-
-    await interaction.response.send_message(
-
-        (
-            "🎉 Nhận thành công **1.000 xu**!\n"
-            f"💰 Ví: **{format_money(get_balance(user_id))} xu**"
-        ),
-
-        ephemeral=True
-    )
-
-
-# =========================================================
-# /COMAT
-# =========================================================
-
-@bot.tree.command(
-    name="comat",
-    description="Nhận 50.000 xu mỗi ngày"
-)
-async def comat(
-    interaction: discord.Interaction
-):
-
-    user_id = interaction.user.id
-
-    ensure_wallet(
-        user_id
-    )
-
-
-    today = datetime.now(
-        TZ
-    ).date().isoformat()
-
-
-    with db() as conn:
-
-        claimed = conn.execute(
-
-            """
-            SELECT 1
-            FROM daily_claims
-            WHERE user_id=?
-            AND claim_date=?
-            """,
-
-            (
-                user_id,
-                today
-            )
-
-        ).fetchone()
-
-
-        if claimed:
-
-            await interaction.response.send_message(
-
-                "❌ Hôm nay m đã nhận 50.000 xu rồi.\n"
-                "⏰ Mai quay lại nhận tiếp.",
-
-                ephemeral=True
-            )
-
-            return
-
-
-        conn.execute(
-
-            """
-            INSERT INTO daily_claims
-            (user_id,claim_date)
-            VALUES(?,?)
-            """,
-
-            (
-                user_id,
-                today
-            )
-        )
-
-
-        conn.execute(
-
-            """
-            UPDATE wallets
-            SET balance=balance+?
-            WHERE user_id=?
-            """,
-
-            (
-                DAILY_BONUS,
-                user_id
-            )
-        )
-
-
-        conn.commit()
-
-
-    await check_vip(
-        user_id,
-        interaction.channel
-    )
-
-
-    await interaction.response.send_message(
-
-        (
-            "🎁 Nhận **50.000 xu** hôm nay!\n"
-            f"💰 Ví: **{format_money(get_balance(user_id))} xu**"
-        ),
-
-        ephemeral=True
-    )
-
-
-# =========================================================
-# /PING
-# =========================================================
-
-@bot.tree.command(
-    name="ping",
-    description="Kiểm tra ping bot"
-)
-async def ping(
-    interaction: discord.Interaction
-):
-
-    latency = round(
-        bot.latency * 1000
-    )
-
-
-    await interaction.response.send_message(
-
-        f"🏓 Pong! `{latency}ms`",
-
-        ephemeral=True
-    )
-
-
-# =========================================================
-# /APIQUOTA
-# =========================================================
-
-@bot.tree.command(
-    name="apiquota",
-    description="Kiểm tra quota API-Football"
-)
-async def apiquota(
-    interaction: discord.Interaction
-):
-
-    if not interaction.user.guild_permissions.manage_guild:
-
-        await interaction.response.send_message(
-            "❌ Chỉ quản lý server mới dùng được.",
-            ephemeral=True
-        )
-
-        return
-
-
-    quota = football.quota or "Chưa có dữ liệu"
-
-
-    errors = football.errors[-3:]
-
-
-    if errors:
-
-        error_text = "\n".join(
-            f"• {x[:180]}"
-            for x in errors
-        )
-
-    else:
-
-        error_text = "Không có lỗi."
-
-
+async def soi(interaction: discord.Interaction):
     embed = discord.Embed(
-
-        title="📡 API-Football",
-
-        color=discord.Color.blue()
-    )
-
-
-    embed.add_field(
-
-        name="Quota còn lại",
-
-        value=f"`{quota}`",
-
-        inline=False
-    )
-
-
-    embed.add_field(
-
-        name="Lỗi gần đây",
-
-        value=error_text[:1000],
-
-        inline=False
-    )
-
-
-    await interaction.response.send_message(
-
-        embed=embed,
-
-        ephemeral=True
-    )
-
-
-# =========================================================
-# /CADO
-# =========================================================
-
-@bot.tree.command(
-    name="cado",
-    description="Xem thông tin ví cá cược"
-)
-async def cado(
-    interaction: discord.Interaction
-):
-
-    row = get_wallet(
-        interaction.user.id
-    )
-
-
-    balance = int(
-        row["balance"]
-    )
-
-    vip = get_vip(
-        balance
-    )
-
-
-    embed = discord.Embed(
-
-        title=(
-            f"💰 VÍ — "
-            f"{interaction.user.display_name}"
+        title="🔎 SOI BÓNG ĐÁ",
+        description=(
+            "🏆 Chọn giải để xem các trận sắp tới.\n"
+            "🔵 Hoặc xem **tất cả trận Man City**."
         ),
-
         color=discord.Color.green()
     )
 
+    embed.add_field(
+        name="🏆 11 GIẢI",
+        value=(
+            "Premier League\n"
+            "Champions League\n"
+            "La Liga\n"
+            "Serie A\n"
+            "Bundesliga\n"
+            "Ligue 1\n"
+            "Eredivisie\n"
+            "Primeira Liga\n"
+            "Championship\n"
+            "FA Cup\n"
+            "Carabao Cup"
+        ),
+        inline=True
+    )
 
     embed.add_field(
+        name="🔵 MAN CITY",
+        value="Tất cả trận sắp tới, không phân biệt giải.",
+        inline=True
+    )
 
-        name="💵 Số dư",
+    await interaction.response.send_message(
+        embed=embed,
+        view=SoiHomeView(),
+        ephemeral=True
+    )
 
-        value=(
-            f"**{format_money(balance)} xu**"
-        ),
 
+# ============================================================
+# /VI
+# ============================================================
+
+@bot.tree.command(
+    name="vi",
+    description="Xem ví và VIP",
+    guild=GUILD
+)
+async def vi(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    balance = get_balance(user_id)
+
+    await check_vip(user_id)
+
+    level = get_vip(balance)
+
+    next_vip = None
+
+    for lv, minimum in reversed(VIP_LEVELS):
+        if minimum > balance:
+            next_vip = (lv, minimum)
+
+    if next_vip:
+        next_text = (
+            f"{vip_icon(next_vip[0])} {vip_name(next_vip[0])}"
+            f" — **{money(next_vip[1])} xu**"
+        )
+    else:
+        next_text = "👑 Đã đạt VIP 10"
+
+    with db() as conn:
+        bets = conn.execute(
+            "SELECT COUNT(*) AS c FROM bets WHERE user_id=?",
+            (user_id,)
+        ).fetchone()["c"]
+
+    embed = discord.Embed(
+        title="👛 VÍ CỦA BẠN",
+        color=discord.Color.gold()
+    )
+
+    embed.add_field(
+        name="💰 Số dư",
+        value=f"**{money(balance)} xu**",
         inline=False
     )
 
-
     embed.add_field(
-
-        name="🏆 VIP",
-
-        value=(
-            f"{vip_icon(vip)} "
-            f"**{vip_name(vip)}**"
-        ),
-
+        name="👑 VIP",
+        value=f"{vip_icon(level)} **{vip_name(level)}**",
         inline=True
     )
 
-
     embed.add_field(
-
-        name="🆔 User ID",
-
-        value=f"`{interaction.user.id}`",
-
+        name="🎯 Tổng cược",
+        value=f"**{bets}**",
         inline=True
     )
 
+    embed.add_field(
+        name="📈 Mốc VIP tiếp theo",
+        value=next_text,
+        inline=False
+    )
 
     await interaction.response.send_message(
-
         embed=embed,
-
         ephemeral=True
     )
 
 
-# =========================================================
+# ============================================================
+# /KHOINGHIEP
+# ============================================================
+
+@bot.tree.command(
+    name="khoinghiep",
+    description="Nhận 1.000 xu khởi nghiệp",
+    guild=GUILD
+)
+async def khoinghiep(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    ensure_wallet(user_id)
+
+    with db() as conn:
+        row = conn.execute(
+            "SELECT started FROM wallets WHERE user_id=?",
+            (user_id,)
+        ).fetchone()
+
+        if row["started"]:
+            await interaction.response.send_message(
+                "❌ M đã nhận **1.000 xu khởi nghiệp** rồi.",
+                ephemeral=True
+            )
+            return
+
+        conn.execute(
+            "UPDATE wallets SET started=1,balance=balance+? WHERE user_id=?",
+            (STARTER_BONUS, user_id)
+        )
+        conn.commit()
+
+    await check_vip(user_id, interaction.channel)
+
+    await interaction.response.send_message(
+        f"🚀 Nhận **{money(STARTER_BONUS)} xu** khởi nghiệp!\n"
+        f"💰 Ví: **{money(get_balance(user_id))} xu**"
+    )
+
+
+# ============================================================
+# /COMAT
+# ============================================================
+
+@bot.tree.command(
+    name="comat",
+    description="Nhận 50.000 xu mỗi ngày",
+    guild=GUILD
+)
+async def comat(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    ensure_wallet(user_id)
+
+    today = datetime.now(TZ).date().isoformat()
+
+    with db() as conn:
+        exists = conn.execute(
+            """
+            SELECT 1 FROM daily_claims
+            WHERE user_id=? AND claim_date=?
+            """,
+            (user_id, today)
+        ).fetchone()
+
+        if exists:
+            await interaction.response.send_message(
+                "❌ Hôm nay m đã nhận **50.000 xu** rồi.",
+                ephemeral=True
+            )
+            return
+
+        conn.execute(
+            """
+            INSERT INTO daily_claims(user_id,claim_date)
+            VALUES (?,?)
+            """,
+            (user_id, today)
+        )
+
+        conn.execute(
+            "UPDATE wallets SET balance=balance+? WHERE user_id=?",
+            (DAILY_BONUS, user_id)
+        )
+
+        conn.commit()
+
+    await check_vip(user_id, interaction.channel)
+
+    await interaction.response.send_message(
+        f"💰 Nhận **{money(DAILY_BONUS)} xu** hôm nay!\n"
+        f"👛 Ví: **{money(get_balance(user_id))} xu**"
+    )
+
+
+# ============================================================
 # /ADMIN
-# =========================================================
+# ============================================================
 
 @bot.tree.command(
     name="admin",
-    description="Admin cộng hoặc trừ xu"
+    description="Admin cộng/trừ xu",
+    guild=GUILD
 )
 @app_commands.describe(
-    action="add hoặc remove",
-    user="Người cần chỉnh xu",
-    amount="Số xu",
-    reason="Lý do"
+    user="Thành viên",
+    amount="Số xu (+ cộng / - trừ)",
+    password="Mật khẩu admin"
 )
 async def admin(
     interaction: discord.Interaction,
-    action: str,
     user: discord.Member,
     amount: int,
-    reason: Optional[str] = None
+    password: str
 ):
-
     if not interaction.user.guild_permissions.administrator:
-
         await interaction.response.send_message(
-
-            "❌ Chỉ Administrator mới dùng được.",
-
+            "❌ M không có quyền Administrator.",
             ephemeral=True
         )
-
         return
 
+    admin_password = os.getenv(
+        "ADMIN_PASSWORD",
+        "provip👑"
+    )
 
-    action = action.lower().strip()
-
-
-    if action not in {
-        "add",
-        "remove",
-        "cong",
-        "tru"
-    }:
-
+    if password != admin_password:
         await interaction.response.send_message(
-
-            "❌ Action phải là `add` hoặc `remove`.",
-
+            "❌ Sai mật khẩu admin.",
             ephemeral=True
         )
-
         return
 
-
-    if amount <= 0:
-
+    if amount == 0:
         await interaction.response.send_message(
-
-            "❌ Amount phải lớn hơn 0.",
-
+            "❌ Số xu phải khác 0.",
             ephemeral=True
         )
-
         return
 
-
-    if action in {
-        "add",
-        "cong"
-    }:
-
-        await add_money(
-            user.id,
-            amount,
-            interaction.channel
-        )
-
-        action_text = "Cộng"
-
-
+    if amount > 0:
+        await add_money(user.id, amount, interaction.channel)
     else:
+        await remove_money(user.id, abs(amount))
 
-        await remove_money(
-            user.id,
-            amount,
-            interaction.channel
-        )
-
-        action_text = "Trừ"
-
+    balance = get_balance(user.id)
+    level = get_vip(balance)
 
     await interaction.response.send_message(
-
-        (
-            f"✅ **{action_text} {format_money(amount)} xu**\n"
-            f"👤 {user.mention}\n"
-            f"💰 Số dư: **{format_money(get_balance(user.id))} xu**\n"
-            f"📝 Lý do: **{reason or 'Không ghi'}**"
-        ),
-
+        f"👑 Đã cập nhật **{user.display_name}**\n"
+        f"💰 Thay đổi: **{amount:+,} xu**\n"
+        f"👛 Ví: **{money(balance)} xu**\n"
+        f"{vip_icon(level)} **{vip_name(level)}**",
         ephemeral=True
     )
 
 
-# =========================================================
+# ============================================================
 # /KETTOAN
-# =========================================================
+# ============================================================
 
 @bot.tree.command(
     name="kettoan",
-    description="Kết toán các cược đã có kết quả"
+    description="Kết toán các cược đã có kết quả",
+    guild=GUILD
 )
-async def kettoan(
-    interaction: discord.Interaction
-):
-
-    if not interaction.user.guild_permissions.manage_guild:
-
-        await interaction.response.send_message(
-
-            "❌ Chỉ quản lý server mới được kết toán.",
-
-            ephemeral=True
-        )
-
-        return
-
-
-    await interaction.response.defer(
-        ephemeral=True
-    )
-
+async def kettoan(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
 
     with db() as conn:
-
         bets = conn.execute(
-
             """
-            SELECT *
-            FROM bets
+            SELECT * FROM bets
             WHERE status='open'
             ORDER BY id ASC
+            LIMIT 100
             """
-
         ).fetchall()
 
-
     if not bets:
-
         await interaction.followup.send(
-
-            "ℹ️ Không có cược đang chờ.",
-
+            "ℹ️ Không có cược nào đang chờ kết toán.",
             ephemeral=True
         )
-
         return
 
-
     settled = 0
-    pending = 0
-    paid = 0
-
+    skipped = 0
 
     for bet in bets:
-
-        fixture_id_value = int(
-            bet["fixture_id"]
-        )
-
-
         try:
-
-            data = await football.request(
-
-                "fixtures",
-
-                {
-                    "id": fixture_id_value
-                }
-            )
-
-
-            fixtures = data.get(
-                "response",
-                []
-            )
-
+            data = await football.fixture(int(bet["fixture_id"]))
+            fixtures = data.get("response", [])
 
             if not fixtures:
-
-                pending += 1
-
+                skipped += 1
                 continue
-
 
             fixture = fixtures[0]
+            result = result_from_fixture(fixture)
 
-
-            status = fixture_status(
-                fixture
-            )
-
-
-            if status in {
-                "NS",
-                "TBD",
-                "PST",
-                "CANC",
-                "ABD",
-                "AWD",
-                "WO"
-            }:
-
-                pending += 1
-
-                continue
-
-
-            teams = (
-                fixture.get(
-                    "teams"
-                )
-                or {}
-            )
-
-
-            home = (
-                teams.get(
-                    "home"
-                )
-                or {}
-            )
-
-
-            away = (
-                teams.get(
-                    "away"
-                )
-                or {}
-            )
-
-
-            result = None
-
-
-            if home.get(
-                "winner"
-            ) is True:
-
-                result = "home"
-
-
-            elif away.get(
-                "winner"
-            ) is True:
-
-                result = "away"
-
-
-            else:
-
-                goals = (
-                    fixture.get(
-                        "goals"
-                    )
-                    or {}
-                )
-
-
-                hg = goals.get(
-                    "home"
-                )
-
-                ag = goals.get(
-                    "away"
-                )
-
-
-                if (
-                    isinstance(hg, int)
-                    and
-                    isinstance(ag, int)
-                ):
-
-                    if hg > ag:
-
-                        result = "home"
-
-                    elif ag > hg:
-
-                        result = "away"
-
-                    else:
-
-                        result = "draw"
-
-
+            # Chỉ FT/AET/PEN mới được kết toán.
             if result is None:
-
-                pending += 1
-
+                skipped += 1
                 continue
 
-
-            user_id = int(
-                bet["user_id"]
-            )
-
-
-            stake = int(
-                bet["stake"]
-            )
-
-
-            choice = bet["choice"]
-
-
-            if choice == result:
-
-                payout = stake * 2
+            if result == bet["choice"]:
+                payout = int(bet["stake"]) * 2
 
                 await add_money(
-                    user_id,
+                    int(bet["user_id"]),
                     payout,
                     interaction.channel
                 )
 
-                paid += payout
-
+                status = "won"
+            else:
+                status = "lost"
 
             with db() as conn:
-
                 conn.execute(
-
-                    """
-                    UPDATE bets
-
-                    SET status='settled',
-                        settled_at=?
-
-                    WHERE id=?
-                    """,
-
-                    (
-                        datetime.now(
-                            TZ
-                        ).isoformat(),
-
-                        int(
-                            bet["id"]
-                        )
-                    )
+                    "UPDATE bets SET status=? WHERE id=?",
+                    (status, bet["id"])
                 )
-
                 conn.commit()
-
 
             settled += 1
 
-
         except Exception:
-
-            pending += 1
-
+            skipped += 1
 
     await interaction.followup.send(
-
-        (
-            "✅ **KẾT TOÁN XONG**\n\n"
-            f"🎯 Đã kết toán: **{settled}**\n"
-            f"⏳ Chưa có kết quả: **{pending}**\n"
-            f"💰 Tổng tiền trả: **{format_money(paid)} xu**"
-        ),
-
+        f"✅ Đã kết toán **{settled}** cược.\n"
+        f"⏳ Chưa thể kết toán: **{skipped}**.",
         ephemeral=True
     )
 
 
-# =========================================================
+# ============================================================
+# /PING
+# ============================================================
+
+@bot.tree.command(
+    name="ping",
+    description="Kiểm tra bot",
+    guild=GUILD
+)
+async def ping(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        f"🏓 Pong! `{round(bot.latency * 1000)}ms`",
+        ephemeral=True
+    )
+
+
+# ============================================================
+# /APIQUOTA
+# ============================================================
+
+@bot.tree.command(
+    name="apiquota",
+    description="Xem quota API",
+    guild=GUILD
+)
+async def apiquota(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        f"📡 API-Football requests còn lại: "
+        f"**{football.last_quota or 'chưa gọi API'}**",
+        ephemeral=True
+    )
+
+
+# ============================================================
+# /CADO
+# ============================================================
+
+@bot.tree.command(
+    name="cado",
+    description="Xem thông tin tài khoản",
+    guild=GUILD
+)
+async def cado(interaction: discord.Interaction):
+    balance = get_balance(interaction.user.id)
+    level = get_vip(balance)
+
+    await interaction.response.send_message(
+        f"👤 **{interaction.user.display_name}**\n"
+        f"💰 Ví: **{money(balance)} xu**\n"
+        f"{vip_icon(level)} **{vip_name(level)}**",
+        ephemeral=True
+    )
+
+
+# ============================================================
 # RAILWAY HEALTH SERVER
-# =========================================================
+# ============================================================
 
 health_runner = None
 
 
-async def health(request):
-
-    return web.json_response({
-
-        "status": "ok",
-
-        "bot": (
-            str(bot.user)
-            if bot.user
-            else None
-        ),
-
-        "time": datetime.now(
-            TZ
-        ).isoformat()
-
-    })
+async def health_handler(request):
+    return web.Response(text="OK")
 
 
 async def start_health_server():
-
     global health_runner
 
-
     if health_runner is not None:
-
         return
 
+    port = int(os.getenv("PORT", "8080"))
 
     app = web.Application()
 
+    app.router.add_get("/", health_handler)
+    app.router.add_get("/health", health_handler)
 
-    app.router.add_get(
-        "/",
-        health
-    )
-
-
-    app.router.add_get(
-        "/health",
-        health
-    )
-
-
-    health_runner = web.AppRunner(
-        app
-    )
-
+    health_runner = web.AppRunner(app)
 
     await health_runner.setup()
 
-
-    port = int(
-        os.getenv(
-            "PORT",
-            "8080"
-        )
-    )
-
-
     site = web.TCPSite(
-
         health_runner,
-
         "0.0.0.0",
-
         port
     )
 
-
     await site.start()
 
-
-    print(
-        f"[HEALTH] Running on port {port}"
-    )
+    print(f"[WEB] Health server: {port}")
 
 
-# =========================================================
-# READY
-# =========================================================
-
-sync_done = False
-
+# ============================================================
+# READY + SYNC
+# ============================================================
 
 @bot.event
 async def on_ready():
+    print(
+        f"[DISCORD] Logged in as "
+        f"{bot.user} ID={bot.user.id}"
+    )
 
-    global sync_done
+    print(f"[DISCORD] Guild ID: {GUILD_ID}")
+
+    try:
+        synced = await bot.tree.sync(guild=GUILD)
+
+        print(
+            f"[DISCORD] Synced {len(synced)} guild commands."
+        )
+
+        print(
+            "[DISCORD] Commands: "
+            + ", ".join(
+                sorted(command.name for command in synced)
+            )
+        )
+
+    except Exception as e:
+        print(
+            f"[DISCORD] SYNC ERROR: "
+            f"{type(e).__name__}: {e}"
+        )
 
 
+# ============================================================
+# MAIN
+# ============================================================
+
+async def main():
     init_db()
-
 
     await football.start()
 
-
     await start_health_server()
 
+    try:
+        async with bot:
+            await bot.start(DISCORD_TOKEN)
 
-    if not sync_done:
+    finally:
+        await football.close()
 
-        try:
-
-            synced = await bot.tree.sync(
-                guild=GUILD
-            )
-
-
-            print(
-                f"[DISCORD] Synced "
-                f"{len(synced)} commands."
-            )
-
-
-            sync_done = True
-
-
-        except Exception as exc:
-
-            print(
-                f"[DISCORD] Sync error: {exc}"
-            )
-
-
-    print(
-        f"[BOT] Logged in as {bot.user}"
-    )
-
-
-# =========================================================
-# MAIN
-# =========================================================
 
 if __name__ == "__main__":
-
-    init_db()
-
-    bot.run(
-        DISCORD_TOKEN
-    )
+    asyncio.run(main())
