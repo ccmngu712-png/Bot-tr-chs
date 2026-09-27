@@ -5,23 +5,6 @@ import requests
 from bs4 import BeautifulSoup
 import random
 import os
-from flask import Flask
-from threading import Thread
-
-# Web server giữ bot sống 24/7 trên Render
-app = Flask('')
-
-@app.route('/')
-def home():
-    return "Bot Soi Keo & Ca Do Real-Time dang hoat dong 24/7!"
-
-def run_web():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
-
-def keep_alive():
-    t = Thread(target=run_web)
-    t.start()
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -134,10 +117,9 @@ async def vi(interaction: discord.Interaction):
     balance = user_wallets.get(user_id, 0)
     await interaction.response.send_message(f"💰 Sếp {interaction.user.mention} hiện đang có **{balance}** tiền cược trong ví. (Dùng `/khoinghiep` nếu chưa có tiền)", ephemeral=True)
 
-# 3. Lệnh soi kèo tự động cập nhật từ web (Đã fix lỗi timeout)
+# 3. Lệnh soi kèo tự động cập nhật từ web
 @bot.tree.command(name="soi", description="Tự động đồng bộ lịch thi đấu mới nhất từ web thể thao để soi kèo")
 async def soi(interaction: discord.Interaction):
-    # Trì hoãn phản hồi để chống lỗi quá 3 giây của Discord
     await interaction.response.defer(ephemeral=True)
     
     matches = fetch_live_matches_from_web()
@@ -193,7 +175,6 @@ async def kettoan(interaction: discord.Interaction, tran_dau: str, doi_thang: st
     await interaction.followup.send(f"✅ Đã kết toán xong trận **{tran_dau}**! Đội thắng: **{doi_thang}**. Đã gửi thông báo DM đầy đủ cho anh em.", ephemeral=True)
 
 if __name__ == "__main__":
-    keep_alive()
     TOKEN = os.getenv("DISCORD_TOKEN")
     if not TOKEN:
         print("❌ LỖI: Chưa cấu hình biến môi trường DISCORD_TOKEN!")
