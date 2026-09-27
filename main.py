@@ -1,16 +1,17 @@
 import discord
 from discord.ext import commands
+from discord import app_commands
 import random
 import os
 from flask import Flask
 from threading import Thread
 
-# Tạo một web server nhỏ để giữ bot không bị Render tắt (nếu chạy dạng Web Service)
+# Web server giữ bot sống 24/7 trên Render
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot bong da dang hoạt động 24/7!"
+    return "Bot bong da dang hoat dong 24/7!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
@@ -20,11 +21,19 @@ def keep_alive():
     t = Thread(target=run_web)
     t.start()
 
-# Cấu hình Discord Bot
 intents = discord.Intents.default()
 intents.message_content = True
 
-bot = commands.Bot(command_prefix="/", intents=intents)
+class FootballBot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix="!", intents=intents)
+
+    async def setup_hook(self):
+        # Đồng bộ Slash Commands với Discord
+        await self.tree.sync()
+        print("Đã đồng bộ hệ thống Slash Commands thành công!")
+
+bot = FootballBot()
 
 user_wallets = {}
 user_squads = {}
@@ -40,48 +49,50 @@ market_players = [
 async def on_ready():
     print(f"Bot bóng đá đã online thành công: {bot.user}")
 
-@bot.command(name="khoinghiep")
-async def khoinghiep(ctx):
-    user_id = ctx.author.id
+@bot.tree.command(name="khoinghiep", description="Nhận vốn 1000 xu và đội bóng khởi nghiệp")
+async def khoinghiep(interaction: discord.Interaction):
+    user_id = interaction.user.id
     if user_id in user_wallets:
-        await ctx.send(f"⚠️ {ctx.author.mention}, sếp đã nhận vốn khởi nghiệp từ trước rồi mà!")
+        await interaction.response.send_message(f"⚠️ {interaction.user.mention}, sếp đã nhận vốn khởi nghiệp từ trước rồi mà!", ephemeral=True)
     else:
         user_wallets[user_id] = 1000
         user_squads[user_id] = ["Thủ môn nghiệp dư", "Hậu vệ góc vườn"]
-        await ctx.send(f"🎉 Chúc mừng {ctx.author.mention} đã gia nhập làng túc cầu! Sếp nhận được **1000 xu** vốn khởi nghiệp.")
+        await interaction.response.send_message(f"🎉 Chúc mừng {interaction.user.mention} đã gia nhập làng túc cầu! Sếp nhận được **1000 xu** vốn khởi nghiệp.")
 
-@bot.command(name="doihinh")
-async def doihinh(ctx):
-    user_id = ctx.author.id
+@bot.tree.command(name="doihinh", description="Xem số dư tài chính và danh sách cầu thủ")
+async def doihinh(interaction: discord.Interaction):
+    user_id = interaction.user.id
     money = user_wallets.get(user_id, 0)
     squad = user_squads.get(user_id, ["Chưa có cầu thủ nào"])
     
-    embed = discord.Embed(title=f"⚽ Câu lạc bộ của {ctx.author.name}", color=discord.Color.green())
+    embed = discord.Embed(title=f"⚽ Câu lạc bộ của {interaction.user.name}", color=discord.Color.green())
     embed.add_field(name="💰 Số dư tài chính", value=f"{money} xu", inline=False)
     embed.add_field(name="🏃 Danh sách cầu thủ", value=", ".join(squad), inline=False)
-    await ctx.send(embed=embed)
+    await interaction.response.send_message(embed=embed)
 
-@bot.command(name="duoan")
-async def duoan(ctx, tran_dau: str, ty_so: str):
-    user_id = ctx.author.id
+@bot.tree.command(name="duoan", description="Dự đoán tỉ số các trận đấu bóng đá")
+@app_commands.describe(tran_dau="Tên trận đấu (VD: MU-MC)", ty_so="Tỷ số dự đoán (VD: 2-1)")
+async def duoan(interaction: discord.Interaction, tran_dau: str, ty_so: str):
+    user_id = interaction.user.id
     if user_id not in user_wallets:
-        await ctx.send("⚠️ Sếp chưa có tài khoản! Hãy gõ `/khoinghiep` trước nhé.")
+        await interaction.response.send_message("⚠️ Sếp chưa có tài khoản! Hãy dùng lệnh `/khoinghiep` trước nhé.", ephemeral=True)
         return
-    await ctx.send(f"✅ Đã ghi nhận! {ctx.author.mention} dự đoán trận **{trận_dau}** có tỷ số **{ty_so}**.")
+    await interaction.response.send_message(f"✅ Đã ghi nhận! {interaction.user.mention} dự đoán trận **{tran_dau}** có tỷ số **{ty_so}**.")
 
-@bot.command(name="cho")
-async def cho(ctx):
+@bot.tree.command(name="cho", description="Mở chợ chuyển nhượng mua bán cầu thủ")
+async def cho(interaction: discord.Interaction):
     embed = discord.Embed(title="🛒 Chợ Chuyển Nhượng Cầu Thủ", description="Danh sách ngôi sao đang rao bán:", color=discord.Color.gold())
     for idx, p in enumerate(market_players):
         embed.add_field(name=f"{idx+1}. {p['name']} (Chỉ số: {p['rating']})", value=f"Giá: **{p['price']} xu**", inline=False)
-    embed.set_footer(text="Gõ lệnh /mua [số_thứ_tự] để tậu cầu thủ về đội!")
-    await ctx.send(embed=embed)
+    embed.set_footer(text="Dùng lệnh /mua [số_thứ_tự] để tậu cầu thủ về đội!")
+    await interaction.response.send_message(embed=embed)
 
-@bot.command(name="mua")
-async def mua(ctx, index: int):
-    user_id = ctx.author.id
+@bot.tree.command(name="mua", description="Mua cầu thủ từ chợ chuyển nhượng")
+@app_commands.describe(index="Số thứ tự cầu thủ trên chợ")
+async def mua(interaction: discord.Interaction, index: int):
+    user_id = interaction.user.id
     if user_id not in user_wallets:
-        await ctx.send("⚠️ Sếp chưa có tài khoản! Hãy gõ `/khoinghiep` trước.")
+        await interaction.response.send_message("⚠️ Sếp chưa có tài khoản! Hãy dùng lệnh `/khoinghiep` trước.", ephemeral=True)
         return
     
     idx = index - 1
@@ -92,30 +103,30 @@ async def mua(ctx, index: int):
         if user_wallets[user_id] >= price:
             user_wallets[user_id] -= price
             user_squads[user_id].append(player["name"])
-            await ctx.send(f"🔥 Thành công! {ctx.author.mention} đã mua thành công **{player['name']}** với giá {price} xu.")
+            await interaction.response.send_message(f"🔥 Thành công! {interaction.user.mention} đã mua thành công **{player['name']}** với giá {price} xu.")
         else:
-            await ctx.send("❌ Sếp không đủ tiền trong ví để rước ngôi sao này về rồi!")
+            await interaction.response.send_message("❌ Sếp không đủ tiền trong ví để rước ngôi sao này về rồi!", ephemeral=True)
     else:
-        await ctx.send("❌ Số thứ tự cầu thủ không hợp lệ.")
+        await interaction.response.send_message("❌ Số thứ tự cầu thủ không hợp lệ.", ephemeral=True)
 
-@bot.command(name="daudoi")
-async def daudoi(ctx, member: discord.Member):
-    if ctx.author == member:
-        await ctx.send("⚠️ Sếp không thể tự đá với chính mình được đâu!")
+@bot.tree.command(name="daudoi", description="Thách đấu giao hữu với thành viên khác trong server")
+@app_commands.describe(member="Thành viên muốn thách đấu")
+async def daudoi(interaction: discord.Interaction, member: discord.Member):
+    if interaction.user == member:
+        await interaction.response.send_message("⚠️ Sếp không thể tự đá với chính mình được đâu!", ephemeral=True)
         return
         
-    teams = [ctx.author.name, member.name]
+    teams = [interaction.user.name, member.name]
     winner = random.choice(teams)
     score_a = random.randint(0, 3)
     score_b = random.randint(0, 3)
     
     embed = discord.Embed(title="🏟️ Trận Cầu Đỉnh Cao", color=discord.Color.blue())
-    embed.add_field(name="Tỉ số chung cuộc", value=f"{ctx.author.name} **{score_a} - {score_b}** {member.name}", inline=False)
+    embed.add_field(name="Tỉ số chung cuộc", value=f"{interaction.user.name} **{score_a} - {score_b}** {member.name}", inline=False)
     embed.add_field(name="🏆 Kết quả", value=f"Chúc mừng **{winner}** đã giành chiến thắng!", inline=False)
     
-    await ctx.send(embed=embed)
+    await interaction.response.send_message(embed=embed)
 
-# Khởi chạy server web ngầm rồi bật bot Discord
 if __name__ == "__main__":
     keep_alive()
     TOKEN = os.getenv("DISCORD_TOKEN")
