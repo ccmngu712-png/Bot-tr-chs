@@ -27,6 +27,8 @@ TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 
 CL_CODE = "CL"
 
+# Manchester City - football-data.org
+MAN_CITY_ID = 65
 
 if not DISCORD_TOKEN:
     raise RuntimeError(
@@ -52,14 +54,12 @@ db = sqlite3.connect(
 
 db.row_factory = sqlite3.Row
 
-
 db.execute("""
 CREATE TABLE IF NOT EXISTS wallets (
     user_id INTEGER PRIMARY KEY,
     balance INTEGER NOT NULL DEFAULT 10000
 )
 """)
-
 
 db.execute("""
 CREATE TABLE IF NOT EXISTS bets (
@@ -73,7 +73,6 @@ CREATE TABLE IF NOT EXISTS bets (
     created_at TEXT NOT NULL
 )
 """)
-
 
 db.commit()
 
@@ -131,7 +130,7 @@ def set_balance(
 
 
 # =========================================================
-# API ERRORS
+# API ERROR
 # =========================================================
 
 class FootballDataError(Exception):
@@ -199,6 +198,8 @@ class FootballDataAPI:
             if now - x < 60
         ]
 
+        # Free plan = 10 requests/minute.
+        # Bot giữ 9 để có một chút khoảng trống.
         if len(self.request_times) >= 9:
 
             wait_time = (
@@ -269,7 +270,6 @@ class FootballDataAPI:
                 params=params
             ) as response:
 
-                # API headers
                 self.remaining = (
                     response.headers.get(
                         "X-Requests-Available-Minute"
@@ -382,6 +382,28 @@ def format_time(
         )
 
 
+def local_date_from_utc(
+    utc_string
+):
+
+    try:
+
+        dt = datetime.fromisoformat(
+            utc_string.replace(
+                "Z",
+                "+00:00"
+            )
+        )
+
+        return dt.astimezone(
+            TZ
+        ).date()
+
+    except Exception:
+
+        return None
+
+
 def get_team(
     fixture,
     side
@@ -446,7 +468,6 @@ bot = commands.Bot(
     command_prefix="!",
     intents=intents
 )
-
 
 GUILD = discord.Object(
     id=GUILD_ID
@@ -544,13 +565,12 @@ async def soi(
     embed = discord.Embed(
         title="⚽ SOI BÓNG ĐÁ",
         description=(
-            "Nguồn dữ liệu: Football-data.org\n\n"
-            "🆓 Free Tier\n"
-            "🏆 Champions League\n"
-            "📅 Lịch trận\n"
-            "📊 Bảng xếp hạng\n"
-            "📈 Kết quả/phong độ\n\n"
-            "Bấm nút bên dưới."
+            "Chọn chế độ muốn soi.\n\n"
+            "🏆 **Champions League**\n"
+            "Xem lịch trận theo ngày.\n\n"
+            "🔵 **Fan Man City**\n"
+            "Xem toàn bộ trận Man City "
+            "sắp tới mà API có dữ liệu."
         ),
         color=discord.Color.blue()
     )
@@ -596,6 +616,661 @@ class LeagueHomeView(
                 color=discord.Color.blue()
             ),
             view=CLDateView()
+        )
+
+    @discord.ui.button(
+        label="🔵 Fan Man City",
+        style=discord.ButtonStyle.success
+    )
+    async def man_city(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+
+        await interaction.response.defer(
+            ephemeral=True
+        )
+
+        await show_mancity_schedule(
+            interaction
+        )
+
+
+# =========================================================
+# MAN CITY SCHEDULE
+# =========================================================
+
+async def show_mancity_schedule(
+    interaction
+):
+
+    try:
+
+        data = await football.get(
+            f"/teams/{MAN_CITY_ID}/matches",
+            {
+                "status": "SCHEDULED",
+                "limit": 100
+            },
+            cache=False
+        )
+
+    except FootballDataError as e:
+
+        await interaction.edit_original_response(
+            content=(
+                "❌ **Không lấy được lịch Man City**\n\n"
+                f"`{shorten(e, 1000)}`"
+            ),
+            embed=None,
+            view=None
+        )
+
+        return
+
+    matches = data.get(
+        "matches",
+        []
+    )
+
+    # Chỉ giữ trận chưa diễn ra.
+    current_time = datetime.now(
+        ZoneInfo("UTC")
+    )
+
+    upcoming = []
+
+    for match in matches:
+
+        utc_string = match.get(
+            "utcDate"
+        )
+
+        if not utc_string:
+            continue
+
+        try:
+
+            dt = datetime.fromisoformat(
+                utc_string.replace(
+                    "Z",
+                    "+00:00"
+                )
+            )
+
+            if dt > current_time:
+
+                upcoming.append(
+                    match
+                )
+
+        except Exception:
+
+            continue
+
+    upcoming.sort(
+        key=lambda x: x.get(
+            "utcDate",
+            ""
+        )
+    )
+
+    if not upcoming:
+
+        await interaction.edit_original_response(
+            content=(
+                "🔵 **MAN CITY**\n\n"
+                "Hiện API không trả về trận "
+                "sắp tới nào."
+            ),
+            embed=None,
+            view=None
+        )
+
+        return
+
+    upcoming = upcoming[:25]
+
+    embed = discord.Embed(
+        title="🔵 MANCHESTER CITY",
+        description=(
+            "🔥 **FAN MAN CITY MODE**\n\n"
+            f"📅 Có **{len(upcoming)}** trận "
+            "sắp tới trong dữ liệu API.\n"
+            "🕐 Giờ hiển thị: Việt Nam"
+        ),
+        color=discord.Color.blue()
+    )
+
+    embed.set_thumbnail(
+        url="https://crests.football-data.org/65.png"
+    )
+
+    for match in upcoming:
+
+        home = team_name(
+            match,
+            "home"
+        )
+
+        away = team_name(
+            match,
+            "away"
+        )
+
+        competition = match.get(
+            "competition",
+            {}
+        )
+
+        competition_name = competition.get(
+            "name",
+            "Không rõ giải"
+        )
+
+        utc_date = match.get(
+            "utcDate",
+            ""
+        )
+
+        venue = match.get(
+            "venue"
+        )
+
+        stage = match.get(
+            "stage"
+        )
+
+        matchday = match.get(
+            "matchday"
+        )
+
+        info = (
+            f"🕐 **{format_time(utc_date)}**\n"
+            f"🏆 {shorten(competition_name, 70)}\n"
+        )
+
+        if venue:
+
+            info += (
+                f"🏟️ {shorten(venue, 70)}\n"
+            )
+
+        if stage:
+
+            info += (
+                f"📌 {stage}"
+            )
+
+        elif matchday:
+
+            info += (
+                f"📌 Matchday {matchday}"
+            )
+
+        embed.add_field(
+            name=(
+                f"⚽ {home} vs {away}"
+            ),
+            value=info,
+            inline=False
+        )
+
+    embed.set_footer(
+        text=(
+            "Nguồn: Football-data.org • "
+            "Lịch thật từ API"
+        )
+    )
+
+    await interaction.edit_original_response(
+        content=None,
+        embed=embed,
+        view=ManCityScheduleView(
+            upcoming
+        )
+    )
+
+
+# =========================================================
+# MAN CITY SELECT
+# =========================================================
+
+class ManCityScheduleView(
+    discord.ui.View
+):
+
+    def __init__(
+        self,
+        matches
+    ):
+
+        super().__init__(
+            timeout=300
+        )
+
+        self.add_item(
+            ManCitySelect(
+                matches
+            )
+        )
+
+
+class ManCitySelect(
+    discord.ui.Select
+):
+
+    def __init__(
+        self,
+        matches
+    ):
+
+        options = []
+
+        for match in matches[:25]:
+
+            match_id = match.get(
+                "id"
+            )
+
+            home = team_name(
+                match,
+                "home"
+            )
+
+            away = team_name(
+                match,
+                "away"
+            )
+
+            competition = match.get(
+                "competition",
+                {}
+            ).get(
+                "name",
+                "Football"
+            )
+
+            options.append(
+                discord.SelectOption(
+                    label=shorten(
+                        f"{home} vs {away}",
+                        100
+                    ),
+                    description=shorten(
+                        competition,
+                        100
+                    ),
+                    value=str(
+                        match_id
+                    )
+                )
+            )
+
+        super().__init__(
+            placeholder="🔵 Chọn trận Man City...",
+            options=options
+        )
+
+        self.matches = matches
+
+    async def callback(
+        self,
+        interaction: discord.Interaction
+    ):
+
+        await interaction.response.defer(
+            ephemeral=True
+        )
+
+        selected_id = int(
+            self.values[0]
+        )
+
+        selected = None
+
+        for match in self.matches:
+
+            if match.get(
+                "id"
+            ) == selected_id:
+
+                selected = match
+
+                break
+
+        if selected is None:
+
+            await interaction.edit_original_response(
+                content="❌ Không tìm thấy trận."
+            )
+
+            return
+
+        await show_mancity_match(
+            interaction,
+            selected
+        )
+
+
+# =========================================================
+# MAN CITY MATCH DETAIL
+# =========================================================
+
+async def show_mancity_match(
+    interaction,
+    match
+):
+
+    match_id = match.get(
+        "id"
+    )
+
+    home = team_name(
+        match,
+        "home"
+    )
+
+    away = team_name(
+        match,
+        "away"
+    )
+
+    home_logo = team_logo(
+        match,
+        "home"
+    )
+
+    away_logo = team_logo(
+        match,
+        "away"
+    )
+
+    competition = match.get(
+        "competition",
+        {}
+    )
+
+    competition_name = competition.get(
+        "name",
+        "Football"
+    )
+
+    competition_crest = competition.get(
+        "emblem"
+    )
+
+    utc_date = match.get(
+        "utcDate",
+        ""
+    )
+
+    status = match.get(
+        "status",
+        "SCHEDULED"
+    )
+
+    venue = match.get(
+        "venue"
+    )
+
+    stage = match.get(
+        "stage"
+    )
+
+    matchday = match.get(
+        "matchday"
+    )
+
+    embed = discord.Embed(
+        title="🔵 MAN CITY — TRẬN SẮP TỚI",
+        description=(
+            f"🏆 **{competition_name}**\n\n"
+            f"⚽ **{home}**\n"
+            "🆚\n"
+            f"**{away}**\n\n"
+            f"🕐 **{format_time(utc_date)}**\n"
+            f"📌 `{status}`"
+        ),
+        color=discord.Color.blue()
+    )
+
+    if home_logo:
+
+        embed.add_field(
+            name="🏠 Home",
+            value=home,
+            inline=True
+        )
+
+    if away_logo:
+
+        embed.add_field(
+            name="✈️ Away",
+            value=away,
+            inline=True
+        )
+
+    if venue:
+
+        embed.add_field(
+            name="🏟️ Sân",
+            value=shorten(
+                venue,
+                100
+            ),
+            inline=False
+        )
+
+    if stage:
+
+        embed.add_field(
+            name="🏆 Vòng",
+            value=f"`{stage}`",
+            inline=True
+        )
+
+    if matchday:
+
+        embed.add_field(
+            name="📅 Matchday",
+            value=f"`{matchday}`",
+            inline=True
+        )
+
+    if competition_crest:
+
+        embed.set_thumbnail(
+            url=competition_crest
+        )
+
+    embed.add_field(
+        name="🆔 Match ID",
+        value=f"`{match_id}`",
+        inline=False
+    )
+
+    embed.set_footer(
+        text=(
+            "🔵 Fan Man City • "
+            "Nguồn: Football-data.org"
+        )
+    )
+
+    await interaction.edit_original_response(
+        content=None,
+        embed=embed,
+        view=ManCityDetailView(
+            match
+        )
+    )
+
+
+# =========================================================
+# MAN CITY DETAIL VIEW
+# =========================================================
+
+class ManCityDetailView(
+    discord.ui.View
+):
+
+    def __init__(
+        self,
+        match
+    ):
+
+        super().__init__(
+            timeout=300
+        )
+
+        self.match = match
+
+    @discord.ui.button(
+        label="📈 Phong độ Man City",
+        style=discord.ButtonStyle.primary
+    )
+    async def form(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+
+        await interaction.response.defer(
+            ephemeral=True
+        )
+
+        try:
+
+            data = await football.get(
+                f"/teams/{MAN_CITY_ID}/matches",
+                {
+                    "status": "FINISHED",
+                    "limit": 5
+                }
+            )
+
+        except FootballDataError as e:
+
+            await interaction.edit_original_response(
+                content=(
+                    "❌ Không lấy được phong độ:\n"
+                    f"`{shorten(e, 700)}`"
+                )
+            )
+
+            return
+
+        matches = data.get(
+            "matches",
+            []
+        )
+
+        if not matches:
+
+            await interaction.edit_original_response(
+                content=(
+                    "❌ Không có dữ liệu phong độ."
+                )
+            )
+
+            return
+
+        lines = []
+
+        for match in matches[:5]:
+
+            home = team_name(
+                match,
+                "home"
+            )
+
+            away = team_name(
+                match,
+                "away"
+            )
+
+            score = match.get(
+                "score",
+                {}
+            ).get(
+                "fullTime",
+                {}
+            )
+
+            hg = score.get(
+                "home"
+            )
+
+            ag = score.get(
+                "away"
+            )
+
+            if hg is None or ag is None:
+                continue
+
+            home_id = team_id(
+                match,
+                "home"
+            )
+
+            if home_id == MAN_CITY_ID:
+
+                if hg > ag:
+                    result = "🟢 W"
+
+                elif hg == ag:
+                    result = "🟡 D"
+
+                else:
+                    result = "🔴 L"
+
+            else:
+
+                if ag > hg:
+                    result = "🟢 W"
+
+                elif ag == hg:
+                    result = "🟡 D"
+
+                else:
+                    result = "🔴 L"
+
+            competition = match.get(
+                "competition",
+                {}
+            ).get(
+                "name",
+                "Football"
+            )
+
+            lines.append(
+                (
+                    f"{result} "
+                    f"**{home} {hg}-{ag} {away}**\n"
+                    f"🏆 {competition}\n"
+                    f"🕐 {format_time(match.get('utcDate', ''))}"
+                )
+            )
+
+        embed = discord.Embed(
+            title="🔵 MAN CITY — 5 TRẬN GẦN NHẤT",
+            description=(
+                "\n\n".join(lines)
+                if lines
+                else "Không có dữ liệu."
+            ),
+            color=discord.Color.blue()
+        )
+
+        embed.set_thumbnail(
+            url="https://crests.football-data.org/65.png"
+        )
+
+        await interaction.edit_original_response(
+            content=None,
+            embed=embed,
+            view=None
         )
 
 
@@ -695,7 +1370,7 @@ class DateModal(
 
 
 # =========================================================
-# GET MATCHES
+# GET CHAMPIONS LEAGUE MATCHES
 # =========================================================
 
 async def get_matches_for_date(
@@ -705,15 +1380,51 @@ async def get_matches_for_date(
 
     try:
 
-        # Football-data cho phép lọc dateFrom/dateTo
+        # Người dùng nhập ngày Việt Nam.
+        # API dùng UTC, nên lấy rộng hơn rồi
+        # lọc lại theo giờ Việt Nam.
+
+        local_day = datetime.strptime(
+            date_string,
+            "%Y-%m-%d"
+        ).replace(
+            tzinfo=TZ
+        )
+
+        utc_start = (
+            local_day
+            - timedelta(hours=2)
+        ).astimezone(
+            ZoneInfo("UTC")
+        )
+
+        utc_end = (
+            local_day
+            + timedelta(
+                hours=1,
+                minutes=59
+            )
+        ).astimezone(
+            ZoneInfo("UTC")
+        )
+
+        api_from = (
+            utc_start.strftime(
+                "%Y-%m-%d"
+            )
+        )
+
+        api_to = (
+            utc_end.strftime(
+                "%Y-%m-%d"
+            )
+        )
+
         data = await football.get(
             "/competitions/CL/matches",
             {
-                "dateFrom":
-                    date_string,
-
-                "dateTo":
-                    date_string
+                "dateFrom": api_from,
+                "dateTo": api_to
             }
         )
 
@@ -735,7 +1446,6 @@ async def get_matches_for_date(
         []
     )
 
-    # Lọc thêm để chắc chắn đúng ngày
     filtered = []
 
     for match in matches:
@@ -745,8 +1455,14 @@ async def get_matches_for_date(
             ""
         )
 
-        if utc_date.startswith(
-            date_string
+        local_date = local_date_from_utc(
+            utc_date
+        )
+
+        if (
+            local_date
+            and str(local_date)
+            == date_string
         ):
 
             filtered.append(
@@ -1012,11 +1728,6 @@ async def show_analysis(
         "home"
     )
 
-    away_crest = team_logo(
-        match,
-        "away"
-    )
-
     utc_date = match.get(
         "utcDate",
         ""
@@ -1045,10 +1756,6 @@ async def show_analysis(
         "away"
     )
 
-    # -----------------------------------------------------
-    # EMBED
-    # -----------------------------------------------------
-
     embed = discord.Embed(
         title="🔎 SOI TRẬN",
         description=(
@@ -1067,10 +1774,6 @@ async def show_analysis(
         embed.set_thumbnail(
             url=home_crest
         )
-
-    # -----------------------------------------------------
-    # SCORE
-    # -----------------------------------------------------
 
     if (
         home_goals is not None
@@ -1093,10 +1796,6 @@ async def show_analysis(
             value="Chưa thi đấu",
             inline=False
         )
-
-    # -----------------------------------------------------
-    # MATCHDAY / STAGE
-    # -----------------------------------------------------
 
     matchday = match.get(
         "matchday"
@@ -1122,10 +1821,6 @@ async def show_analysis(
             inline=True
         )
 
-    # -----------------------------------------------------
-    # VENUE
-    # -----------------------------------------------------
-
     venue = match.get(
         "venue"
     )
@@ -1140,10 +1835,6 @@ async def show_analysis(
             ),
             inline=False
         )
-
-    # -----------------------------------------------------
-    # IDS
-    # -----------------------------------------------------
 
     embed.add_field(
         name="🆔 Match ID",
@@ -1162,10 +1853,6 @@ async def show_analysis(
         value=f"`{away_id}`",
         inline=True
     )
-
-    # -----------------------------------------------------
-    # BASIC FORM
-    # -----------------------------------------------------
 
     form_text = await get_team_form(
         home_id,
@@ -1205,9 +1892,7 @@ async def get_team_form(
 
     if not home_id or not away_id:
 
-        return (
-            "Không có ID đội."
-        )
+        return "Không có ID đội."
 
     try:
 
@@ -1217,20 +1902,16 @@ async def get_team_form(
                 football.get(
                     f"/teams/{home_id}/matches",
                     {
-                        "status":
-                            "FINISHED",
-                        "limit":
-                            5
+                        "status": "FINISHED",
+                        "limit": 5
                     }
                 ),
 
                 football.get(
                     f"/teams/{away_id}/matches",
                     {
-                        "status":
-                            "FINISHED",
-                        "limit":
-                            5
+                        "status": "FINISHED",
+                        "limit": 5
                     }
                 )
             )
@@ -1238,9 +1919,7 @@ async def get_team_form(
 
     except Exception:
 
-        return (
-            "Không lấy được form."
-        )
+        return "Không lấy được form."
 
     def make_form(
         data,
@@ -1253,7 +1932,6 @@ async def get_team_form(
         )
 
         if not matches:
-
             return "N/A"
 
         results = []
@@ -1280,7 +1958,6 @@ async def get_team_form(
                 hg is None
                 or ag is None
             ):
-
                 continue
 
             home_id_match = (
@@ -1312,7 +1989,6 @@ async def get_team_form(
                     results.append("L")
 
         if not results:
-
             return "N/A"
 
         return " ".join(
@@ -1770,6 +2446,10 @@ async def main():
 
         await football.close()
 
+
+# =========================================================
+# START
+# =========================================================
 
 if __name__ == "__main__":
 
