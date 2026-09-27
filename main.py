@@ -2,13 +2,30 @@ import discord
 from discord.ext import commands
 import random
 import os
+from flask import Flask
+from threading import Thread
 
+# Tạo một web server nhỏ để giữ bot không bị Render tắt (nếu chạy dạng Web Service)
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot bong da dang hoạt động 24/7!"
+
+def run_web():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    t = Thread(target=run_web)
+    t.start()
+
+# Cấu hình Discord Bot
 intents = discord.Intents.default()
 intents.message_content = True
 
 bot = commands.Bot(command_prefix="/", intents=intents)
 
-# Dữ liệu mẫu quản lý câu lạc bộ
 user_wallets = {}
 user_squads = {}
 market_players = [
@@ -21,7 +38,7 @@ market_players = [
 
 @bot.event
 async def on_ready():
-    print(f"Bot bóng đá đã online thành công trên mây: {bot.user}")
+    print(f"Bot bóng đá đã online thành công: {bot.user}")
 
 @bot.command(name="khoinghiep")
 async def khoinghiep(ctx):
@@ -98,6 +115,11 @@ async def daudoi(ctx, member: discord.Member):
     
     await ctx.send(embed=embed)
 
-# Đọc Token bảo mật từ biến môi trường của hệ thống Cloud
-TOKEN = os.getenv("DISCORD_TOKEN")
-bot.run(TOKEN)
+# Khởi chạy server web ngầm rồi bật bot Discord
+if __name__ == "__main__":
+    keep_alive()
+    TOKEN = os.getenv("DISCORD_TOKEN")
+    if not TOKEN:
+        print("❌ LỖI: Chưa cấu hình biến môi trường DISCORD_TOKEN trên Cloud!")
+    else:
+        bot.run(TOKEN)
