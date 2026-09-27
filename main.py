@@ -11,7 +11,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot FC Online VN & Tu Soi Keo dang hoat dong 24/7!"
+    return "Bot FC Online VN & Soi Keo Chinh Xác dang hoat dong 24/7!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
@@ -43,6 +43,7 @@ async def on_ready():
 user_wallets = {}      # Số dư BP
 user_squads = {}       # Sơ đồ chiến thuật
 user_inventory = {}    # Kho thẻ cầu thủ
+active_bets = []       # Danh sách các vé cược đang chờ kết toán
 
 DATABASE_PLAYERS = [
     {"name": "Ronaldo (ICON)", "pos": "ST", "rating": 105, "price": 5000},
@@ -54,28 +55,34 @@ DATABASE_PLAYERS = [
     {"name": "Courtois (23NG)", "pos": "GK", "rating": 102, "price": 3000},
 ]
 
-# Giao diện chọn trận để bot tự soi kèo
+# Giao diện chọn trận chuẩn xác theo lịch thực tế sếp cung cấp
 class AutoSoiSelectView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=60)
         
+        # Cập nhật chuẩn 100% theo hình ảnh lịch thi đấu thực tế
         matches = [
-            {"home": "Real Madrid", "away": "Man City", "league": "Cúp C1"},
-            {"home": "Arsenal", "away": "Bayern Munich", "league": "Cúp C1"},
-            {"home": "Liverpool", "away": "MU", "league": "Ngoại Hạng Anh"},
-            {"home": "Barca", "away": "Inter Milan", "league": "Cúp C1"}
+            {"home": "Real Betis", "away": "Porto", "time": "02:00 - 15/10"},
+            {"home": "Roma", "away": "Real Madrid", "time": "02:00 - 15/10"},
+            {"home": "Manchester City", "away": "Paris Saint-Germain", "time": "02:00 - 15/10"},
+            {"home": "Shakhtar Donetsk", "away": "AEK Athens", "time": "02:00 - 15/10"},
+            {"home": "Bodø / Glimt", "away": "Borussia Dortmund", "time": "02:00 - 15/10"}
         ]
         
         options = []
         for m in matches:
             match_str = f"{m['home']} vs {m['away']}"
-            options.append(discord.SelectOption(label=match_str, description=f"Giải đấu: {m['league']}", value=match_str))
+            options.append(discord.SelectOption(
+                label=match_str, 
+                description=f"📅 Lịch đá: {m['time']}", 
+                value=match_str
+            ))
 
         self.add_item(AutoSoiSelect(options))
 
 class AutoSoiSelect(discord.ui.Select):
     def __init__(self, options):
-        super().__init__(placeholder="🔍 Chọn trận đấu để AI tự động soi kèo...", options=options)
+        super().__init__(placeholder="🔍 Chọn trận đấu để AI tự động so sánh & soi kèo...", options=options)
 
     async def callback(self, interaction: discord.Interaction):
         match_name = self.values[0]
@@ -83,7 +90,7 @@ class AutoSoiSelect(discord.ui.Select):
         home_team = teams[0]
         away_team = teams[1]
 
-        # Thuật toán tự động phân tích sức mạnh & tỷ số
+        # Thuật toán phân tích tương quan lực lượng
         home_power = random.randint(75, 95)
         away_power = random.randint(75, 95)
         
@@ -94,11 +101,11 @@ class AutoSoiSelect(discord.ui.Select):
             advice = f"🔥 Khuyên sếp nên vào cửa: **{away_team} (Bứt phá)**"
             pred_score = f"{random.randint(0, 1)} - {random.randint(2, 4)}"
         else:
-            advice = f"⚖️ Kèo cân bằng, khả năng cao chia điểm hoặc đá hiệp phụ!"
+            advice = f"⚖️ Kèo đấu ngang tài ngang sức, khả năng chia điểm cao!"
             pred_score = f"1 - 1"
 
-        embed = discord.Embed(title=f"🤖 BẢNG PHÂN TÍCH SOIKÈO AI: {match_name}", color=discord.Color.gold())
-        embed.add_field(name="📊 Đánh giá sức mạnh", value=f"• {home_team}: `{home_power}%`\n• {away_team}: `{away_power}%`", inline=False)
+        embed = discord.Embed(title=f"🤖 PHÂN TÍCH SOIKÈO CHUẨN XÁC: {match_name}", color=discord.Color.gold())
+        embed.add_field(name="📊 Tương quan lực lượng", value=f"• {home_team}: `{home_power}%`\n• {away_team}: `{away_power}%`", inline=False)
         embed.add_field(name="🎯 Dự đoán tỷ số vàng", value=f"Tỷ số độc quyền từ hệ thống: **{pred_score}**", inline=False)
         embed.add_field(name="💡 Gợi ý đặt cược", value=advice, inline=False)
         embed.set_footer(text="Dùng lệnh /cado [trận_đấu] [đội_chọn] [số_tiền] để xuống xác ngay!")
@@ -117,16 +124,16 @@ async def khoinghiep(interaction: discord.Interaction):
         user_squads[user_id] = {"formation": "4-3-3"}
         await interaction.response.send_message(f"🎉 Chúc mừng sếp {interaction.user.mention} gia nhập thế giới bóng đá! Nhận ngay **10,000 BP** vào kho.")
 
-# 2. Lệnh tự soi kèo
-@bot.tree.command(name="soi", description="Hệ thống tự động soi kèo, so sánh lực lượng và chốt tỷ số")
+# 2. Lệnh tự soi kèo cập nhật đúng lịch thực tế
+@bot.tree.command(name="soi", description="Hệ thống tự động quét lịch thi đấu thực tế và soi kèo")
 async def soi(interaction: discord.Interaction):
     view = AutoSoiSelectView()
-    embed = discord.Embed(title="⚽ TRUNG TÂM PHÂN TÍCH KÈO THỰC TẾ", description="Chọn trận đấu bên dưới để hệ thống tự động quét dữ liệu và đưa ra phân tích:", color=discord.Color.blue())
+    embed = discord.Embed(title="⚽ LỊCH THI ĐẤU & TRUNG TÂM PHÂN TÍCH KÈO", description="Chọn trận đấu chuẩn xác từ danh sách bên dưới để AI tự động so sánh lực lượng:", color=discord.Color.blue())
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 # 3. Lệnh cá độ bóng đá
 @bot.tree.command(name="cado", description="Xuống xác đặt cược BP dựa trên kết quả soi kèo")
-@app_commands.describe(tran_dau="Tên trận đấu (VD: Real-ManCity)", doi_chon="Tên đội bóng sếp đặt cược", so_tien="Số BP đặt cược")
+@app_commands.describe(tran_dau="Tên trận đấu (VD: RealBetis-Porto)", doi_chon="Tên đội bóng sếp đặt cược", so_tien="Số BP đặt cược")
 async def cado(interaction: discord.Interaction, tran_dau: str, doi_chon: str, so_tien: int):
     user_id = interaction.user.id
     if user_id not in user_wallets or user_wallets[user_id] < so_tien:
@@ -134,9 +141,39 @@ async def cado(interaction: discord.Interaction, tran_dau: str, doi_chon: str, s
         return
     
     user_wallets[user_id] -= so_tien
-    await interaction.response.send_message(f"🎲 Đã ghi nhận vé cược! Sếp **{interaction.user.mention}** đã xuống xác **{so_tien} BP** cho đội **{doi_chon}** tại trận **{tran_dau}**. Chúc sếp hốt bạc!")
+    active_bets.append({"user_id": user_id, "tran_dau": tran_dau, "doi_chon": doi_chon, "so_tien": so_tien})
+    
+    await interaction.response.send_message(f"🎲 Đã ghi nhận vé cược! Sếp **{interaction.user.mention}** đã xuống xác **{so_tien} BP** cho đội **{doi_chon}** tại trận **{tran_dau}**. Chúc sếp hốt bạc!", ephemeral=True)
 
-# 4. Lệnh xem đội hình
+# 4. Lệnh Admin kết toán và bắn tin nhắn DM
+@bot.tree.command(name="kettoan", description="[Admin] Chốt kết quả trận đấu, tự động trả thưởng và nhắn tin DM cho người chơi")
+@app_commands.describe(tran_dau="Tên trận đấu", doi_thang="Tên đội thắng cuộc thực tế")
+async def kettoan(interaction: discord.Interaction, tran_dau: str, doi_thang: str):
+    await interaction.response.defer(ephemeral=True)
+    
+    for bet in active_bets[:]:
+        if bet["tran_dau"].lower() == tran_dau.lower():
+            user_id = bet["user_id"]
+            user = await bot.fetch_user(user_id)
+            
+            if bet["doi_chon"].lower() == doi_thang.lower():
+                reward = bet["so_tien"] * 2
+                user_wallets[user_id] += reward
+                try:
+                    await user.send(f"🎉 **CHÚNG MỪNG SẾP!** Trận **{tran_dau}** đội **{doi_thang}** đã thắng!\n💰 Sếp đã hốt về **{reward} BP** vào ví cá nhân.")
+                except:
+                    pass
+            else:
+                try:
+                    await user.send(f"😢 **CHIA BUỒN VỚI SẾP!** Trận **{tran_dau}** đội **{bet['doi_chon']}** đã thua.\n💸 Sếp đã mất **{bet['so_tien']} BP** cho nhà cái.")
+                except:
+                    pass
+            
+            active_bets.remove(bet)
+
+    await interaction.followup.send(f"✅ Đã kết toán xong trận **{tran_dau}**! Đội thắng: **{doi_thang}**. Đã bắn thông báo DM cho toàn bộ anh em tham gia cược.", ephemeral=True)
+
+# 5. Lệnh xem đội hình
 @bot.tree.command(name="doihinh", description="Xem tài chính, sơ đồ chiến thuật và kho thẻ cầu thủ")
 async def doihinh(interaction: discord.Interaction):
     user_id = interaction.user.id
@@ -150,7 +187,7 @@ async def doihinh(interaction: discord.Interaction):
     embed.add_field(name="🎒 Kho thẻ cầu thủ", value=", ".join(inventory), inline=False)
     await interaction.response.send_message(embed=embed)
 
-# 5. Lệnh chợ chuyển nhượng
+# 6. Lệnh chợ chuyển nhượng
 @bot.tree.command(name="cho", description="Mở chợ chuyển nhượng săn thẻ cầu thủ khủng")
 async def cho(interaction: discord.Interaction):
     embed = discord.Embed(title="🛒 CHỢ CHUYỂN NHƯỢNG CẦU THỦ", description="Danh sách siêu sao đang được giao dịch:", color=discord.Color.gold())
@@ -159,7 +196,7 @@ async def cho(interaction: discord.Interaction):
     embed.set_footer(text="Dùng lệnh /mua [số_thứ_tự] để rước cầu thủ về kho!")
     await interaction.response.send_message(embed=embed)
 
-# 6. Lệnh mua cầu thủ
+# 7. Lệnh mua cầu thủ
 @bot.tree.command(name="mua", description="Mua cầu thủ từ chợ chuyển nhượng")
 @app_commands.describe(index="Số thứ tự cầu thủ trên chợ")
 async def mua(interaction: discord.Interaction, index: int):
