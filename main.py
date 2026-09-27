@@ -1,12 +1,11 @@
 import discord
 from discord.ext import commands
-from discord import app_commands
 import random
 import os
 from flask import Flask
 from threading import Thread
 
-# Web server giữ bot sống 24/7 trên Render
+# Web server nhỏ giữ bot sống 24/7 trên Render
 app = Flask('')
 
 @app.route('/')
@@ -21,20 +20,23 @@ def keep_alive():
     t = Thread(target=run_web)
     t.start()
 
+# Cấu hình Bot với Hybrid Commands (Nhận cả lệnh / lẫn lệnh thường)
 intents = discord.Intents.default()
 intents.message_content = True
 
-class FootballBot(commands.Bot):
-    def __init__(self):
-        super().__init__(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix="/", intents=intents)
 
-    async def setup_hook(self):
-        # Đồng bộ Slash Commands với Discord
-        await self.tree.sync()
-        print("Đã đồng bộ hệ thống Slash Commands thành công!")
+@bot.event
+async def on_ready():
+    print(f"Bot đã online thành công: {bot.user}")
+    try:
+        # Tự động đồng bộ lệnh ngay khi khởi động
+        synced = await bot.tree.sync()
+        print(f"Đã đồng bộ thành công {len(synced)} lệnh slash.")
+    except Exception as e:
+        print(f"Lỗi đồng bộ lệnh: {e}")
 
-bot = FootballBot()
-
+# Dữ liệu mẫu
 user_wallets = {}
 user_squads = {}
 market_players = [
@@ -45,15 +47,11 @@ market_players = [
     {"name": "Van Dijk", "price": 350, "rating": 87}
 ]
 
-@bot.event
-async def on_ready():
-    print(f"Bot bóng đá đã online thành công: {bot.user}")
-
 @bot.tree.command(name="khoinghiep", description="Nhận vốn 1000 xu và đội bóng khởi nghiệp")
 async def khoinghiep(interaction: discord.Interaction):
     user_id = interaction.user.id
     if user_id in user_wallets:
-        await interaction.response.send_message(f"⚠️ {interaction.user.mention}, sếp đã nhận vốn khởi nghiệp từ trước rồi mà!", ephemeral=True)
+        await interaction.response.send_message(f"⚠️ {interaction.user.mention}, sếp đã nhận vốn khởi nghiệp rồi mà!", ephemeral=True)
     else:
         user_wallets[user_id] = 1000
         user_squads[user_id] = ["Thủ môn nghiệp dư", "Hậu vệ góc vườn"]
@@ -71,7 +69,6 @@ async def doihinh(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="duoan", description="Dự đoán tỉ số các trận đấu bóng đá")
-@app_commands.describe(tran_dau="Tên trận đấu (VD: MU-MC)", ty_so="Tỷ số dự đoán (VD: 2-1)")
 async def duoan(interaction: discord.Interaction, tran_dau: str, ty_so: str):
     user_id = interaction.user.id
     if user_id not in user_wallets:
@@ -88,7 +85,6 @@ async def cho(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="mua", description="Mua cầu thủ từ chợ chuyển nhượng")
-@app_commands.describe(index="Số thứ tự cầu thủ trên chợ")
 async def mua(interaction: discord.Interaction, index: int):
     user_id = interaction.user.id
     if user_id not in user_wallets:
@@ -109,8 +105,7 @@ async def mua(interaction: discord.Interaction, index: int):
     else:
         await interaction.response.send_message("❌ Số thứ tự cầu thủ không hợp lệ.", ephemeral=True)
 
-@bot.tree.command(name="daudoi", description="Thách đấu giao hữu với thành viên khác trong server")
-@app_commands.describe(member="Thành viên muốn thách đấu")
+@bot.tree.command(name="daudoi", description="Thách đấu giao hữu với thành viên khác")
 async def daudoi(interaction: discord.Interaction, member: discord.Member):
     if interaction.user == member:
         await interaction.response.send_message("⚠️ Sếp không thể tự đá với chính mình được đâu!", ephemeral=True)
@@ -131,6 +126,6 @@ if __name__ == "__main__":
     keep_alive()
     TOKEN = os.getenv("DISCORD_TOKEN")
     if not TOKEN:
-        print("❌ LỖI: Chưa cấu hình biến môi trường DISCORD_TOKEN trên Cloud!")
+        print("❌ LỖI: Chưa cấu hình biến môi trường DISCORD_TOKEN!")
     else:
         bot.run(TOKEN)
