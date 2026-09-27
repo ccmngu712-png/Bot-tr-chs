@@ -54,7 +54,6 @@ def fetch_live_matches_from_web():
         
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, 'html.parser')
-            # Hệ thống bóc tách trận đấu thực tế, đồng bộ chuẩn theo web
             return [
                 {"home": "Real Betis", "away": "Porto", "time": "02:00 - 15/10 (Live Web)"},
                 {"home": "Roma", "away": "Real Madrid", "time": "02:00 - 15/10 (Live Web)"},
@@ -74,10 +73,8 @@ def fetch_live_matches_from_web():
 
 # Giao diện chọn trận lấy từ web
 class WebSoiSelectView(discord.ui.View):
-    def __init__(self):
+    def __init__(self, matches):
         super().__init__(timeout=60)
-        
-        matches = fetch_live_matches_from_web()
         options = []
         for m in matches:
             match_str = f"{m['home']} vs {m['away']}"
@@ -137,12 +134,17 @@ async def vi(interaction: discord.Interaction):
     balance = user_wallets.get(user_id, 0)
     await interaction.response.send_message(f"💰 Sếp {interaction.user.mention} hiện đang có **{balance}** tiền cược trong ví. (Dùng `/khoinghiep` nếu chưa có tiền)", ephemeral=True)
 
-# 3. Lệnh soi kèo tự động cập nhật từ web
+# 3. Lệnh soi kèo tự động cập nhật từ web (Đã fix lỗi timeout)
 @bot.tree.command(name="soi", description="Tự động đồng bộ lịch thi đấu mới nhất từ web thể thao để soi kèo")
 async def soi(interaction: discord.Interaction):
-    view = WebSoiSelectView()
+    # Trì hoãn phản hồi để chống lỗi quá 3 giây của Discord
+    await interaction.response.defer(ephemeral=True)
+    
+    matches = fetch_live_matches_from_web()
+    view = WebSoiSelectView(matches)
     embed = discord.Embed(title="🌐 TRUNG TÂM SOI KÈO REAL-TIME TỪ WEB", description="Dữ liệu được cập nhật tự động từ trang thể thao. Chọn trận đấu bên dưới để phân tích:", color=discord.Color.blue())
-    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    
+    await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
 # 4. Lệnh cá độ bóng đá
 @bot.tree.command(name="cado", description="Đặt cược tiền vào đội bóng sếp chọn")
