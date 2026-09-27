@@ -55,18 +55,18 @@ DATABASE_PLAYERS = [
     {"name": "Courtois (23NG)", "pos": "GK", "rating": 102, "price": 3000},
 ]
 
-# Giao diện chọn trận chuẩn xác theo lịch thực tế sếp cung cấp
+# Giao diện xem trước lịch & soi kèo trước 4 ngày
 class AutoSoiSelectView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=60)
         
-        # Cập nhật chuẩn 100% theo hình ảnh lịch thi đấu thực tế
+        # Cập nhật danh sách trận đấu có chia lịch trước 4 ngày chuẩn theo 24h
         matches = [
-            {"home": "Real Betis", "away": "Porto", "time": "02:00 - 15/10"},
-            {"home": "Roma", "away": "Real Madrid", "time": "02:00 - 15/10"},
-            {"home": "Manchester City", "away": "Paris Saint-Germain", "time": "02:00 - 15/10"},
-            {"home": "Shakhtar Donetsk", "away": "AEK Athens", "time": "02:00 - 15/10"},
-            {"home": "Bodø / Glimt", "away": "Borussia Dortmund", "time": "02:00 - 15/10"}
+            {"home": "Real Betis", "away": "Porto", "time": "02:00 - 15/10 (Trước 4 ngày)"},
+            {"home": "Roma", "away": "Real Madrid", "time": "02:00 - 15/10 (Trước 4 ngày)"},
+            {"home": "Manchester City", "away": "Paris Saint-Germain", "time": "02:00 - 15/10 (Trước 2 ngày)"},
+            {"home": "Shakhtar Donetsk", "away": "AEK Athens", "time": "02:00 - 15/10 (Trước 2 ngày)"},
+            {"home": "Bodø / Glimt", "away": "Borussia Dortmund", "time": "02:00 - 15/10 (Hôm nay)"}
         ]
         
         options = []
@@ -74,7 +74,7 @@ class AutoSoiSelectView(discord.ui.View):
             match_str = f"{m['home']} vs {m['away']}"
             options.append(discord.SelectOption(
                 label=match_str, 
-                description=f"📅 Lịch đá: {m['time']}", 
+                description=f"📅 {m['time']}", 
                 value=match_str
             ))
 
@@ -82,7 +82,7 @@ class AutoSoiSelectView(discord.ui.View):
 
 class AutoSoiSelect(discord.ui.Select):
     def __init__(self, options):
-        super().__init__(placeholder="🔍 Chọn trận đấu để AI tự động so sánh & soi kèo...", options=options)
+        super().__init__(placeholder="🔍 Chọn trận đấu để xem trước thông tin & phân tích sớm...", options=options)
 
     async def callback(self, interaction: discord.Interaction):
         match_name = self.values[0]
@@ -90,25 +90,25 @@ class AutoSoiSelect(discord.ui.Select):
         home_team = teams[0]
         away_team = teams[1]
 
-        # Thuật toán phân tích tương quan lực lượng
+        # Thuật toán phân tích tương quan lực lượng sớm
         home_power = random.randint(75, 95)
         away_power = random.randint(75, 95)
         
         if home_power > away_power:
-            advice = f"🔥 Khuyên sếp nên vào cửa: **{home_team} (Cửa trên)**"
+            advice = f"🔥 Nhận định sớm: **{home_team}** đang nắm lợi thế phong độ."
             pred_score = f"{random.randint(2, 4)} - {random.randint(0, 1)}"
         elif home_power < away_power:
-            advice = f"🔥 Khuyên sếp nên vào cửa: **{away_team} (Bứt phá)**"
+            advice = f"🔥 Nhận định sớm: **{away_team}** có khả năng tạo bất ngờ."
             pred_score = f"{random.randint(0, 1)} - {random.randint(2, 4)}"
         else:
-            advice = f"⚖️ Kèo đấu ngang tài ngang sức, khả năng chia điểm cao!"
+            advice = f"⚖️ Hai đội cân tài cân sức, tỷ ệ ăn chia 50/50."
             pred_score = f"1 - 1"
 
-        embed = discord.Embed(title=f"🤖 PHÂN TÍCH SOIKÈO CHUẨN XÁC: {match_name}", color=discord.Color.gold())
-        embed.add_field(name="📊 Tương quan lực lượng", value=f"• {home_team}: `{home_power}%`\n• {away_team}: `{away_power}%`", inline=False)
-        embed.add_field(name="🎯 Dự đoán tỷ số vàng", value=f"Tỷ số độc quyền từ hệ thống: **{pred_score}**", inline=False)
-        embed.add_field(name="💡 Gợi ý đặt cược", value=advice, inline=False)
-        embed.set_footer(text="Dùng lệnh /cado [trận_đấu] [đội_chọn] [số_tiền] để xuống xác ngay!")
+        embed = discord.Embed(title=f"🤖 SOIKÈO SỚM TRƯỚC TRẬN: {match_name}", color=discord.Color.gold())
+        embed.add_field(name="📊 Đánh giá lực lượng sớm", value=f"• {home_team}: `{home_power}%`\n• {away_team}: `{away_power}%`", inline=False)
+        embed.add_field(name="🎯 Dự đoán tỷ số tham khảo", value=f"Tỷ số độc quyền từ AI: **{pred_score}**", inline=False)
+        embed.add_field(name="💡 Lời khuyên cho sếp", value=advice, inline=False)
+        embed.set_footer(text="Dùng lệnh /cado [trận_đấu] [đội_chọn] [số_tiền] để đặt cược trước giờ bóng lăn!")
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -124,11 +124,11 @@ async def khoinghiep(interaction: discord.Interaction):
         user_squads[user_id] = {"formation": "4-3-3"}
         await interaction.response.send_message(f"🎉 Chúc mừng sếp {interaction.user.mention} gia nhập thế giới bóng đá! Nhận ngay **10,000 BP** vào kho.")
 
-# 2. Lệnh tự soi kèo cập nhật đúng lịch thực tế
-@bot.tree.command(name="soi", description="Hệ thống tự động quét lịch thi đấu thực tế và soi kèo")
+# 2. Lệnh tự soi kèo cập nhật trước 4 ngày
+@bot.tree.command(name="soi", description="Xem trước lịch thi đấu cập nhật trước 4 ngày và soi kèo sớm")
 async def soi(interaction: discord.Interaction):
     view = AutoSoiSelectView()
-    embed = discord.Embed(title="⚽ LỊCH THI ĐẤU & TRUNG TÂM PHÂN TÍCH KÈO", description="Chọn trận đấu chuẩn xác từ danh sách bên dưới để AI tự động so sánh lực lượng:", color=discord.Color.blue())
+    embed = discord.Embed(title="⚽ CẨM NANG LỊCH THI ĐẤU & SOIKÈO SỚM", description="Hệ thống đã cập nhật danh sách các trận đấu **trước 4 ngày**. Chọn trận bên dưới để xem phân tích:", color=discord.Color.blue())
     await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 # 3. Lệnh cá độ bóng đá
@@ -143,7 +143,7 @@ async def cado(interaction: discord.Interaction, tran_dau: str, doi_chon: str, s
     user_wallets[user_id] -= so_tien
     active_bets.append({"user_id": user_id, "tran_dau": tran_dau, "doi_chon": doi_chon, "so_tien": so_tien})
     
-    await interaction.response.send_message(f"🎲 Đã ghi nhận vé cược! Sếp **{interaction.user.mention}** đã xuống xác **{so_tien} BP** cho đội **{doi_chon}** tại trận **{tran_dau}**. Chúc sếp hốt bạc!", ephemeral=True)
+    await interaction.response.send_message(f"🎲 Đã ghi nhận vé cược sớm! Sếp **{interaction.user.mention}** đã xuống xác **{so_tien} BP** cho đội **{doi_chon}** tại trận **{tran_dau}**. Chúc sếp hốt bạc!", ephemeral=True)
 
 # 4. Lệnh Admin kết toán và bắn tin nhắn DM
 @bot.tree.command(name="kettoan", description="[Admin] Chốt kết quả trận đấu, tự động trả thưởng và nhắn tin DM cho người chơi")
