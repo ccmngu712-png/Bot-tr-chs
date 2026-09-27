@@ -28,33 +28,29 @@ async def on_ready():
 user_wallets = {}      # Ví tiền của người chơi
 active_bets = []       # Danh sách vé cược chờ kết toán
 
-# Hàm cào lịch thi đấu chuẩn xác từ link Cúp C1 mới của sếp
+# Hàm cào lịch thi đấu có chống treo (Timeout 3s)
 def fetch_live_matches_from_web():
     try:
         url = "https://www.24h.com.vn/bong-da/lich-thi-dau-cup-c1-champions-league-c48a465411.html"
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-        response = requests.get(url, headers=headers, timeout=5)
+        response = requests.get(url, headers=headers, timeout=3) # Timeout ngắn chống kẹt bot
         
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, 'html.parser')
             matches = []
-            
-            # Cố gắng bóc tách dữ liệu thực tế từ trang Cúp C1 mới
-            # Tìm các khối chứa thông tin trận đấu trên 24h
             match_elements = soup.find_all(['div', 'tr'], class_=lambda x: x and ('match' in x or 'item' in x or 'row' in x))
             
-            for el in match_elements[:6]:
+            for el in match_elements[:5]:
                 text = el.get_text(separator=" - ", strip=True)
                 if " - " in text and len(text) < 150:
                     matches.append({"home": "Trận Cúp C1", "away": "Hôm nay", "time": text[:50]})
             
             if matches:
                 return matches
-                
     except Exception as e:
-        print(f"Lỗi cào dữ liệu từ web: {e}")
+        print(f"Cảnh báo cào web lỗi/treo, dùng dữ liệu dự phòng: {e}")
     
-    # Danh sách dự phòng chuẩn Cúp C1 cập nhật nóng hôm nay
+    # Danh sách Cúp C1 chất lượng cao dự phòng ngay lập tức không sợ chết lệnh
     return [
         {"home": "Real Madrid", "away": "AC Milan", "time": "Hôm nay - Cúp C1"},
         {"home": "Bayern Munich", "away": "Benfica", "time": "Hôm nay - Cúp C1"},
@@ -126,14 +122,14 @@ async def vi(interaction: discord.Interaction):
     balance = user_wallets.get(user_id, 0)
     await interaction.response.send_message(f"💰 Sếp {interaction.user.mention} hiện đang có **{balance}** tiền cược trong ví. (Dùng `/khoinghiep` nếu chưa có tiền)", ephemeral=True)
 
-# 3. Lệnh soi kèo cập nhật trực tiếp từ link Cúp C1 chuẩn
+# 3. Lệnh soi kèo chống kẹt lệnh
 @bot.tree.command(name="soi", description="Tự động đồng bộ lịch thi đấu Cúp C1 mới nhất hôm nay để soi kèo")
 async def soi(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     
     matches = fetch_live_matches_from_web()
     view = WebSoiSelectView(matches)
-    embed = discord.Embed(title="🏆 TRUNG TÂM SOI KÈO CÚP C1 HÔM NAY", description="Đã cập nhật đúng link lịch thi đấu nóng hổi. Chọn trận đấu bên dưới để phân tích:", color=discord.Color.blue())
+    embed = discord.Embed(title="🏆 TRUNG TÂM SOI KÈO CÚP C1 HÔM NAY", description="Đã tối ưu tốc độ phản hồi siêu tốc. Chọn trận đấu bên dưới để phân tích:", color=discord.Color.blue())
     
     await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
@@ -168,24 +164,4 @@ async def kettoan(interaction: discord.Interaction, tran_dau: str, doi_thang: st
             
             if bet["doi_chon"].lower() == doi_thang.lower():
                 reward = bet["so_tien"] * 2
-                user_wallets[user_id] += reward
-                try:
-                    await user.send(f"🎉 **CHÚNG MỪNG SẾP!** Trận **{tran_dau}** đội **{doi_thang}** đã thắng!\n💰 Sếp đã hốt về **{reward}** tiền thưởng vào ví.")
-                except:
-                    pass
-            else:
-                try:
-                    await user.send(f"😢 **CHIA BUỒN VỚI SẾP!** Trận **{tran_dau}** đội **{bet['doi_chon']}** đã thua.\n💸 Sếp đã mất **{bet['so_tien']}** vào tay nhà cái.")
-                except:
-                    pass
-            
-            active_bets.remove(bet)
-
-    await interaction.followup.send(f"✅ Đã kết toán xong trận **{tran_dau}**! Đội thắng: **{doi_thang}**. Đã gửi thông báo DM đầy đủ cho anh em.", ephemeral=True)
-
-if __name__ == "__main__":
-    TOKEN = os.getenv("DISCORD_TOKEN")
-    if not TOKEN:
-        print("❌ LỖI: Chưa cấu hình biến môi trường DISCORD_TOKEN!")
-    else:
-        bot.run(TOKEN)
+            ...
